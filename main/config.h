@@ -27,5 +27,7 @@ static const char* TAG = "CarModule";
 #define CORRESP_NORMAL_SIMILARITY 30 // normals of a corresponding point in old space to its pair in new space have to be at most 30 degrees apart
 #define MAX_DISTANCE_PER_ITERATION 50 // maximum distance a corresponding point can be apart from its pair
 #define MAXIMUM_UNCERTAINTY_INVERVAL 0.1 // golden section minimization will stop once angle uncertainty is within 0.1 degrees
+#define MAXIMUM_RRT_ITERATIONS 50 // maximum number of nodes RRT will try to create
+#define COARSE_RATIO 10 // downscaling factor for coarse occupancy grid
 
 #endif

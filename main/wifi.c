@@ -1,5 +1,6 @@
 #include "wifi.h"
 
+extern volatile bool slam_restart;
 
 static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
     printf("Event nr: %ld!\n", event_id);
@@ -55,6 +56,7 @@ static esp_err_t index_handler(httpd_req_t *req) {
         "<html>"
         "<body style='background:gray'>"
         "   <canvas id='map' width='250' height='250' style='border:2px solid red; width: 1000px; height: 1000px; image-rendering: pixelated; margin: auto;'></canvas>"
+        "   <button onclick='restartSlam()'>Restart</button>"
         "   <script>"
         "   async function updateMap() {"
         "       const response = await fetch('/map');"
@@ -69,6 +71,7 @@ static esp_err_t index_handler(httpd_req_t *req) {
         "           else if (data[i] == 2) values = [0, 0, 255, 255];"
         "           else if (data[i] == 3) values = [255, 0, 255, 255];"
         "           else if (data[i] == 4) values = [0, 255, 0, 255];"
+        "           else if (data[i] == 255) values = [150, 150, 150, 255];"
         "           return values;"
         "       }"
         "       for (let i = 0; i < 250 * 250; i++) {" // MAP_SIZE 250
@@ -79,6 +82,9 @@ static esp_err_t index_handler(httpd_req_t *req) {
         "           imageData.data[i*4+3] = v[3];"
         "       }"
         "       ctx.putImageData(imageData, 0, 0);"
+        "   }"
+        "   async function restartSlam() {"
+        "       await fetch('/restart');"
         "   }"
         "   setInterval(updateMap, 1000);"
         "   updateMap();"
@@ -109,6 +115,19 @@ static const httpd_uri_t index_uri = {
     .user_ctx   = NULL
 };
 
+static esp_err_t restart_slam_handler(httpd_req_t *req) {
+    httpd_resp_sendstr(req, "ok");
+    slam_restart = true;
+    return ESP_OK;
+}
+
+static const httpd_uri_t restart_slam_uri = {
+    .uri        = "/restart",
+    .method     = HTTP_GET,
+    .handler    = restart_slam_handler,
+    .user_ctx   = NULL
+};
+
 void handle_server_init() {
     wifi_init_softap();
     httpd_handle_t server = start_webserver();
@@ -117,7 +136,9 @@ void handle_server_init() {
     if (server) {
         esp_err_t r1 = httpd_register_uri_handler(server, &index_uri);
         esp_err_t r2 = httpd_register_uri_handler(server, &map_uri);
+        esp_err_t r3 = httpd_register_uri_handler(server, &restart_slam_uri);
         printf("index handler registered: %d\n", r1);
         printf("map handler registered: %d\n", r2);
+        printf("restart handler registered: %d\n", r3);
     }
 }

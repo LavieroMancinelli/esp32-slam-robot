@@ -17,6 +17,9 @@ int iterations = 0;
 
 const Dev_t sensor = 0x29;
 uint8_t map[MAP_SIZE][MAP_SIZE] = {0};
+bool coarse_map[MAP_SIZE / COARSE_RATIO][MAP_SIZE / COARSE_RATIO] = {false};
+
+volatile bool slam_restart = true;
 
 
 // direction: 0=CCW (forward), 1=CW (backward), PWMspeed is 0-100 value for % of full pwoer
@@ -500,7 +503,7 @@ void SLAM_run() {
     double global_trans[2] = {0};
     double global_rot = 0;
 
-    while (iterations < 4) {
+    while (iterations < 2) {
         prev = SLAM_iteration(prev, global_trans, &global_rot);
         changeSpeedA(0, MOVE_SPEED);
         changeSpeedB(0, MOVE_SPEED);
@@ -509,6 +512,169 @@ void SLAM_run() {
         changeSpeedA(0, 0);
         changeSpeedB(0, 0);
     }
+}
+
+
+
+typedef struct RRT_node {
+    int x;
+    int y;
+    struct RRT_node * parent;
+    struct RRT_node ** children;
+    size_t child_cnt;
+    size_t child_cap;
+} RRT_node;
+
+RRT_node * create_RRT_node_vals(int x, int y, RRT_node * parent, size_t child_cnt, size_t child_cap) {
+    RRT_node * node = malloc(sizeof(RRT_node));
+    node->x = x;
+    node->y = y;
+    node->parent = parent;
+    node->child_cnt = child_cnt;
+    node->child_cap = child_cap;
+    node->children = malloc(node->child_cap * sizeof(RRT_node *));
+    return node;
+}
+
+RRT_node * create_RRT_node_null() {
+    RRT_node * node = malloc(sizeof(RRT_node));
+    node->x = MAP_SIZE / 2;
+    node->y = MAP_SIZE / 2;
+    node->parent = NULL;
+    node->child_cnt = 0;
+    node->child_cap = 5; // arbitrary starting capacity
+    node->children = malloc(node->child_cap * sizeof(RRT_node *));
+    return node;
+}
+
+RRT_node * find_nearest_RRT_node(RRT_node * root, RRT_node * a) {
+    RRT_node ** queue = malloc(sizeof(RRT_node *) * MAXIMUM_RRT_ITERATIONS);
+    size_t i = 0, j = 1; // j size of filled portion
+    queue[0] = root;
+
+    int a_x = a->x, a_y = a->y;
+    double closest_dist_to_a = DBL_MAX;
+    RRT_node * closest_node_to_a = NULL;
+    while (i < j) {
+        int x = queue[i]->x, y = queue[i]->y;
+        double dist_to_a = sqrt(pow(x - a_x, 2) + pow(y - a_y, 2));
+        if (dist_to_a < closest_dist_to_a) {
+            closest_dist_to_a = dist_to_a;
+            closest_node_to_a = queue[i];
+        }
+
+        for (size_t k = 0; k < queue[i]->child_cnt; ++k)
+            queue[j++] = queue[i]->children[k];
+        ++i;
+    }
+
+    free(queue);
+    return closest_node_to_a;
+}
+
+
+void fill_coarse_map() {
+    for (size_t i = 0; i < MAP_SIZE; ++i) {
+        for (size_t j = 0; j < MAP_SIZE; ++j) {
+            if (map[i][j] != 0)
+                coarse_map[i/COARSE_RATIO][j/COARSE_RATIO] = true;
+        }
+    }
+}
+
+bool edge_constraints_met(RRT_node * a, RRT_node * b) { // local planner
+    if (a == NULL || b == NULL) return false;
+    
+    // use bresenhams line algorithm to walk along edge on coarse map
+    int a_x = a->x / COARSE_RATIO, a_y = a->y / COARSE_RATIO, b_x = b->x / COARSE_RATIO, b_y = b->y / COARSE_RATIO;
+    int dx = abs(b_x - a_x), dy = -abs(b_y - a_y);
+    int s_x = a_x < b_x ? 1 : -1, s_y = a_y < b_y ? 1 : -1;
+    int error = dx + dy;
+
+    while (true) {
+        if (coarse_map[a_y][a_x])
+            return false;
+
+        int error_times_2 = 2 * error;
+        if (error_times_2 >= dy) {
+            if (a_x == b_x) break;
+            error += dy;
+            a_x += s_x;
+        } 
+        if (error_times_2 <= dx) {
+            if (a_y == b_y) break;
+            error += dx;
+            a_y += s_y;
+        }
+    }
+
+    return true;
+}
+
+RRT_node * compute_RRT() {
+    fill_coarse_map();
+    RRT_node * root = create_RRT_node_null();
+    RRT_node * cur = root;
+    for (size_t i = 0; i < MAXIMUM_RRT_ITERATIONS; ++i) { // try to add a node_a made from random points in space to tree
+        size_t random_map_index = rand() % (MAP_SIZE * MAP_SIZE);
+        size_t random_map_y = random_map_index / MAP_SIZE, random_map_x = random_map_index % MAP_SIZE;
+        RRT_node * node_a = create_RRT_node_vals(random_map_x, random_map_y, cur, 0, 5);
+        RRT_node * node_b = find_nearest_RRT_node(root, node_a);
+
+        if (edge_constraints_met(node_a, node_b)) { // add node_a to tree
+            node_a->parent = node_b;
+
+            if (node_b->child_cnt >= node_b->child_cap) {
+                node_b->child_cap *= 2;
+                node_b->children = realloc(node_b->children, node_b->child_cap * sizeof(RRT_node *));
+            }
+
+            node_b->children[node_b->child_cnt++] = node_a;
+        } else {
+            free(node_a->children);
+            free(node_a);
+        }
+    }
+
+    return root;
+}
+
+void draw_RRT_on_map(RRT_node* root) {
+    RRT_node ** queue = malloc(sizeof(RRT_node *) * MAXIMUM_RRT_ITERATIONS); // assume no more RRT nodes than MAP_SIZE, can implement resizing array vector later
+    size_t i = 0, j = 1; // j size of filled portion
+    queue[0] = root;
+
+    while (i < j) {
+        RRT_node * a = queue[i];
+        for (size_t k = 0; k < a->child_cnt; ++k) {
+            RRT_node * b = queue[i]->children[k];
+
+            // interpolate between a and b to fill map
+            int a_x = a->x, a_y = a->y, b_x = b->x, b_y = b->y;
+            int x_diff = abs(b_x - a_x);
+            bool a_is_less = a_x < b_x;
+            int x_1 = a_is_less ? a_x : b_x;
+            int x_2 = a_is_less ? b_x : a_x;
+            int y_1 = a_is_less ? a_y : b_y;
+            int y_2 = a_is_less ? b_y : a_y;
+            int y, y_for_next_x;
+            for (int x = x_1; x <= x_1 + x_diff; ++x) { // for each x value, fill each cell value between x_i,y_i and the x_i, y_(i+1)
+                y = y_1 + ((x-x_1) * (y_2-y_1)) / (x_2-x_1);
+                y_for_next_x = y_1 + ((x+1-x_1) * (y_2-y_1)) / (x_2-x_1);
+                int y_small = y < y_for_next_x ? y : y_for_next_x;
+                int y_large = y < y_for_next_x ? y_for_next_x : y;
+                for (int y_i = y_small; y_i <= y_large; ++y_i) {
+                    if (map[y_i][x] == 0)
+                        map[y_i][x] = 255;
+                }
+            }
+
+            queue[j++] = b;
+
+        }
+        ++i;
+    }
+    free(queue);
 }
 
 
@@ -602,8 +768,18 @@ void app_main(void)
     recenter_servo();
 
     //test_map_fill();
-    SLAM_run();
 
-    while (1) {vTaskDelay(pdMS_TO_TICKS(1000));};
+    while (1) {
+        if (slam_restart) {
+            slam_restart = false;
+            printf("restarting slam\n");
+            iterations = 0;
+            memset(map, 0, sizeof(map));
+            SLAM_run();
+            RRT_node * RRT_root = compute_RRT();
+            draw_RRT_on_map(RRT_root);
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
+    };
 }
     
