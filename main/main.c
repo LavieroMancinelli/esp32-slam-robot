@@ -582,33 +582,41 @@ void fill_coarse_map() {
     }
 }
 
-bool edge_constraints_met(RRT_node * a, RRT_node * b) { // local planner
-    if (a == NULL || b == NULL) return false;
-    
+bool bresenhams_line(RRT_node * a, RRT_node * b, bool edge_constraint_or_draw_rrt) { // false = check edge constraint, true = draw RRT on map
     // use bresenhams line algorithm to walk along edge on coarse map
     int a_x = a->x / COARSE_RATIO, a_y = a->y / COARSE_RATIO, b_x = b->x / COARSE_RATIO, b_y = b->y / COARSE_RATIO;
+    if (edge_constraint_or_draw_rrt) {
+        a_x = a->x; a_y = a->y; b_x = b->x; b_y = b->y;
+    }
     int dx = abs(b_x - a_x), dy = -abs(b_y - a_y);
     int s_x = a_x < b_x ? 1 : -1, s_y = a_y < b_y ? 1 : -1;
     int error = dx + dy;
 
     while (true) {
-        if (coarse_map[a_y][a_x])
-            return false;
-
-        int error_times_2 = 2 * error;
-        if (error_times_2 >= dy) {
-            if (a_x == b_x) break;
-            error += dy;
-            a_x += s_x;
-        } 
-        if (error_times_2 <= dx) {
-            if (a_y == b_y) break;
-            error += dx;
-            a_y += s_y;
+        if (!edge_constraint_or_draw_rrt) {
+            if (coarse_map[a_y][a_x])
+                return false;
         }
+        else if (a_y >= 0 && a_y < MAP_SIZE && a_x >= 0 && a_x < MAP_SIZE) {
+            if (map[a_y][a_x] == 0)
+                map[a_y][a_x] = 255;
+        }
+
+        if (a_x == b_x && a_y == b_y) break;
+
+        // step
+        int e2 = 2 * error;
+        if (e2 >= dy) { error += dy; a_x += s_x; }
+        if (e2 <= dx) { error += dx; a_y += s_y; }
     }
 
     return true;
+}
+
+bool edge_constraints_met(RRT_node * a, RRT_node * b) { // local planner
+    if (a == NULL || b == NULL) return false;
+
+    return bresenhams_line(a, b, false);
 }
 
 RRT_node * compute_RRT() {
@@ -648,29 +656,9 @@ void draw_RRT_on_map(RRT_node* root) {
         RRT_node * a = queue[i];
         for (size_t k = 0; k < a->child_cnt; ++k) {
             RRT_node * b = queue[i]->children[k];
-
-            // interpolate between a and b to fill map
-            int a_x = a->x, a_y = a->y, b_x = b->x, b_y = b->y;
-            int x_diff = abs(b_x - a_x);
-            bool a_is_less = a_x < b_x;
-            int x_1 = a_is_less ? a_x : b_x;
-            int x_2 = a_is_less ? b_x : a_x;
-            int y_1 = a_is_less ? a_y : b_y;
-            int y_2 = a_is_less ? b_y : a_y;
-            int y, y_for_next_x;
-            for (int x = x_1; x <= x_1 + x_diff; ++x) { // for each x value, fill each cell value between x_i,y_i and the x_i, y_(i+1)
-                y = y_1 + ((x-x_1) * (y_2-y_1)) / (x_2-x_1);
-                y_for_next_x = y_1 + ((x+1-x_1) * (y_2-y_1)) / (x_2-x_1);
-                int y_small = y < y_for_next_x ? y : y_for_next_x;
-                int y_large = y < y_for_next_x ? y_for_next_x : y;
-                for (int y_i = y_small; y_i <= y_large; ++y_i) {
-                    if (map[y_i][x] == 0)
-                        map[y_i][x] = 255;
-                }
-            }
+            bresenhams_line(a, b, true);
 
             queue[j++] = b;
-
         }
         ++i;
     }
