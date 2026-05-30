@@ -17,10 +17,27 @@ int iterations = 0;
 
 const Dev_t sensor = 0x29;
 uint8_t map[MAP_SIZE][MAP_SIZE] = {0};
+uint8_t map_tree[MAP_SIZE][MAP_SIZE] = {0};
 bool coarse_map[MAP_SIZE / COARSE_RATIO][MAP_SIZE / COARSE_RATIO] = {false};
 
 volatile bool slam_restart = true;
 
+
+typedef struct RRT_node {
+    int x;
+    int y;
+    struct RRT_node * parent;
+    struct RRT_node ** children;
+    size_t child_cnt;
+    size_t child_cap;
+} RRT_node;
+
+void draw_RRT_on_map(RRT_node *);
+RRT_node * compute_RRT();
+void free_RRT(RRT_node *);
+
+
+RRT_node * RRT_traversal_queue[MAXIMUM_RRT_ITERATIONS] = {NULL};
 
 // direction: 0=CCW (forward), 1=CW (backward), PWMspeed is 0-100 value for % of full pwoer
 void changeSpeedA(int direction, int PWMspeed) {
@@ -441,8 +458,6 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
             compute_correspondence_pairs(local_points_x_y, SENSOR_FREQ, prev->points_x_y, corresp_points_x_y, test_rot, &num_pairs, &num_outliers, combined_x_y_and_pair_dists);
             double tmd_1 = compute_total_matching_distance(local_points_x_y, corresp_points_x_y, SENSOR_FREQ, num_pairs, num_outliers, combined_x_y_and_pair_dists, &delta_Tx_1, &delta_Ty_1);
 
-            
-            //printf("For test_rot 1 = %f, tmd was %f, num_pairs was %d, num_outliers was %d\n", test_rot, tmd_1, num_pairs, num_outliers);
 
             test_rot = x2;
 
@@ -452,8 +467,7 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
             compute_correspondence_pairs(local_points_x_y, SENSOR_FREQ, prev->points_x_y, corresp_points_x_y, test_rot, &num_pairs, &num_outliers, combined_x_y_and_pair_dists);
             double tmd_2 = compute_total_matching_distance(local_points_x_y, corresp_points_x_y, SENSOR_FREQ, num_pairs, num_outliers, combined_x_y_and_pair_dists, &delta_Tx_2, &delta_Ty_2);
             
-            //printf("For test_rot 2 = %f, tmd was %f, num_pairs was %d, num_outliers was %d\n", test_rot, tmd_2, num_pairs, num_outliers);
-
+            
             if (tmd_1 < tmd_2) {
                 gs_upper_bound = x2;
             } else {
@@ -505,25 +519,22 @@ void SLAM_run() {
 
     while (iterations < 2) {
         prev = SLAM_iteration(prev, global_trans, &global_rot);
+        RRT_node * RRT_root = compute_RRT();
+        draw_RRT_on_map(RRT_root);
+        
+        // use rrt to compute next pos/rot
         changeSpeedA(0, MOVE_SPEED);
         changeSpeedB(0, MOVE_SPEED);
-        
         vTaskDelay(pdMS_TO_TICKS(MOVE_TIME_PER_STEP));
         changeSpeedA(0, 0);
         changeSpeedB(0, 0);
+
+        free_RRT(RRT_root);
     }
 }
 
 
 
-typedef struct RRT_node {
-    int x;
-    int y;
-    struct RRT_node * parent;
-    struct RRT_node ** children;
-    size_t child_cnt;
-    size_t child_cap;
-} RRT_node;
 
 RRT_node * create_RRT_node_vals(int x, int y, RRT_node * parent, size_t child_cnt, size_t child_cap) {
     RRT_node * node = malloc(sizeof(RRT_node));
@@ -548,27 +559,25 @@ RRT_node * create_RRT_node_null() {
 }
 
 RRT_node * find_nearest_RRT_node(RRT_node * root, RRT_node * a) {
-    RRT_node ** queue = malloc(sizeof(RRT_node *) * MAXIMUM_RRT_ITERATIONS);
     size_t i = 0, j = 1; // j size of filled portion
-    queue[0] = root;
+    RRT_traversal_queue[0] = root;
 
     int a_x = a->x, a_y = a->y;
     double closest_dist_to_a = DBL_MAX;
     RRT_node * closest_node_to_a = NULL;
     while (i < j) {
-        int x = queue[i]->x, y = queue[i]->y;
+        int x = RRT_traversal_queue[i]->x, y = RRT_traversal_queue[i]->y;
         double dist_to_a = sqrt(pow(x - a_x, 2) + pow(y - a_y, 2));
         if (dist_to_a < closest_dist_to_a) {
             closest_dist_to_a = dist_to_a;
-            closest_node_to_a = queue[i];
+            closest_node_to_a = RRT_traversal_queue[i];
         }
 
-        for (size_t k = 0; k < queue[i]->child_cnt; ++k)
-            queue[j++] = queue[i]->children[k];
+        for (size_t k = 0; k < RRT_traversal_queue[i]->child_cnt; ++k)
+            RRT_traversal_queue[j++] = RRT_traversal_queue[i]->children[k];
         ++i;
     }
 
-    free(queue);
     return closest_node_to_a;
 }
 
@@ -598,8 +607,8 @@ bool bresenhams_line(RRT_node * a, RRT_node * b, bool edge_constraint_or_draw_rr
                 return false;
         }
         else if (a_y >= 0 && a_y < MAP_SIZE && a_x >= 0 && a_x < MAP_SIZE) {
-            if (map[a_y][a_x] == 0)
-                map[a_y][a_x] = 255;
+            if (map_tree[a_y][a_x] == 0)
+                map_tree[a_y][a_x] = 255;
         }
 
         if (a_x == b_x && a_y == b_y) break;
@@ -647,22 +656,41 @@ RRT_node * compute_RRT() {
     return root;
 }
 
-void draw_RRT_on_map(RRT_node* root) {
-    RRT_node ** queue = malloc(sizeof(RRT_node *) * MAXIMUM_RRT_ITERATIONS); // assume no more RRT nodes than MAP_SIZE, can implement resizing array vector later
+void draw_RRT_on_map(RRT_node * root) {
+    memcpy(map_tree, map, sizeof(uint8_t) * MAP_SIZE * MAP_SIZE);
     size_t i = 0, j = 1; // j size of filled portion
-    queue[0] = root;
+    RRT_traversal_queue[0] = root;
 
+    
     while (i < j) {
-        RRT_node * a = queue[i];
+        RRT_node * a = RRT_traversal_queue[i];
         for (size_t k = 0; k < a->child_cnt; ++k) {
-            RRT_node * b = queue[i]->children[k];
+            RRT_node * b = a->children[k];
             bresenhams_line(a, b, true);
 
-            queue[j++] = b;
+            RRT_traversal_queue[j++] = b;
+        }
+        ++i;
+        
+    }
+}
+
+void free_RRT(RRT_node * root) {
+    size_t i = 0, j = 1; // j size of filled portion
+    RRT_traversal_queue[0] = root;
+
+    while (i < j) {
+        RRT_node * node = RRT_traversal_queue[i];
+        for (size_t k = 0; k < node->child_cnt; ++k) {
+            RRT_node * child = node->children[k];
+            RRT_traversal_queue[j++] = child;
         }
         ++i;
     }
-    free(queue);
+
+    for (size_t k = 0; k < j; ++k) {
+        free(RRT_traversal_queue[k]);
+    }
 }
 
 
@@ -747,15 +775,7 @@ void app_main(void)
 
     handle_server_init();
 
-    
-    //for (int i = 3; i > 0; --i) {
-    //    printf("Countdown: %d\n", i);
-    //    vTaskDelay(pdMS_TO_TICKS(250));
-    //}
-
     recenter_servo();
-
-    //test_map_fill();
 
     while (1) {
         if (slam_restart) {
@@ -764,8 +784,6 @@ void app_main(void)
             iterations = 0;
             memset(map, 0, sizeof(map));
             SLAM_run();
-            RRT_node * RRT_root = compute_RRT();
-            draw_RRT_on_map(RRT_root);
         }
         vTaskDelay(pdMS_TO_TICKS(100));
     };

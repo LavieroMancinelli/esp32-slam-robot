@@ -86,7 +86,7 @@ static esp_err_t index_handler(httpd_req_t *req) {
         "   async function restartSlam() {"
         "       await fetch('/restart');"
         "   }"
-        "   setInterval(updateMap, 1000);"
+        "   setInterval(updateMap, 250);"
         "   updateMap();"
         "   </script>"
         "</body>"
@@ -97,7 +97,7 @@ static esp_err_t index_handler(httpd_req_t *req) {
 
 static esp_err_t map_handler(httpd_req_t *req) {
     httpd_resp_set_type(req, "application/octet-stream");
-    httpd_resp_send(req, (char*)map, MAP_SIZE * MAP_SIZE);
+    httpd_resp_send(req, (char*)map_tree, MAP_SIZE * MAP_SIZE);
     return ESP_OK;
 }
 
