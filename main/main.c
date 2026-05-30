@@ -110,7 +110,7 @@ void recenter_servo() {
 void fill_map_from_points_x_y(double points_x_y[], size_t points_len) {
     for (size_t i = 0; i < points_len; ++i) {
         double x = points_x_y[2*i], y = points_x_y[2*i+1];
-        if (x == 0.0 || y == 0.0)
+        if (fabs(x) < 5.0 || fabs(y) < 5.0)
             continue; // invalid point
         int j = -(int)(y / MAP_RATIO) + MAP_SIZE / 2;
         int k = -(int)(x / MAP_RATIO) + MAP_SIZE / 2;
@@ -605,11 +605,12 @@ bool bresenhams_line(RRT_node * a, RRT_node * b, uint8_t edge_constraint_or_draw
 
     while (true) {
         if (edge_constraint_or_draw_rrt == 0) {
-            if (coarse_map[a_y][a_x])
+            if (coarse_map[a_y][a_x] || (coarse_tree_map[a_y][a_x] && (
+                (a_x != a->x / COARSE_RATIO || a_y != a->y / COARSE_RATIO) &&
+                (a_x != b->x / COARSE_RATIO || a_y != b->y / COARSE_RATIO))))
                 return false;
         } else if (edge_constraint_or_draw_rrt == 1) {
-            if (coarse_tree_map[a_y][a_x] == 0)
-                coarse_tree_map[a_y][a_x] = 255;
+            coarse_tree_map[a_y][a_x] = true;
         } else if (a_y >= 0 && a_y < MAP_SIZE && a_x >= 0 && a_x < MAP_SIZE) {
             if (map_tree[a_y][a_x] == 0)
                 map_tree[a_y][a_x] = 255;
@@ -629,8 +630,8 @@ bool bresenhams_line(RRT_node * a, RRT_node * b, uint8_t edge_constraint_or_draw
 bool edge_constraints_met(RRT_node * a, RRT_node * b) { // local planner
     if (a == NULL || b == NULL) return false;
 
-    int b_x = b->x, b_y = b->y;
-    if (coarse_tree_map[b_y][b_x] != 0) // collision if 2nd point too near an edge
+    // prevent adding a new point too close to the other one (can't verify doesnt intersect tree)
+    if (a->x / COARSE_RATIO == b->x / COARSE_RATIO && a->y / COARSE_RATIO == b->y / COARSE_RATIO)
         return false;
 
     return bresenhams_line(a, b, 0);
@@ -638,6 +639,7 @@ bool edge_constraints_met(RRT_node * a, RRT_node * b) { // local planner
 
 RRT_node * compute_RRT() {
     fill_coarse_map();
+    memset(coarse_tree_map, 0, sizeof(bool) * ((MAP_SIZE / COARSE_RATIO) * (MAP_SIZE / COARSE_RATIO)));
     RRT_node * root = create_RRT_node_null();
     RRT_node * cur = root;
     for (size_t i = 0; i < MAXIMUM_RRT_ITERATIONS; ++i) { // try to add a node_a made from random points in space to tree
