@@ -19,6 +19,7 @@ const Dev_t sensor = 0x29;
 uint8_t map[MAP_SIZE][MAP_SIZE] = {0};
 uint8_t map_tree[MAP_SIZE][MAP_SIZE] = {0};
 bool coarse_map[MAP_SIZE / COARSE_RATIO][MAP_SIZE / COARSE_RATIO] = {false};
+bool coarse_tree_map[MAP_SIZE / COARSE_RATIO][MAP_SIZE / COARSE_RATIO] = {false};
 
 volatile bool slam_restart = true;
 
@@ -591,10 +592,11 @@ void fill_coarse_map() {
     }
 }
 
-bool bresenhams_line(RRT_node * a, RRT_node * b, bool edge_constraint_or_draw_rrt) { // false = check edge constraint, true = draw RRT on map
+// 0 = check edge constraint on coarse_map, 1 = draw edge constraint on coarse_map, 2 = draw RRT on map
+bool bresenhams_line(RRT_node * a, RRT_node * b, uint8_t edge_constraint_or_draw_rrt) {
     // use bresenhams line algorithm to walk along edge on coarse map
     int a_x = a->x / COARSE_RATIO, a_y = a->y / COARSE_RATIO, b_x = b->x / COARSE_RATIO, b_y = b->y / COARSE_RATIO;
-    if (edge_constraint_or_draw_rrt) {
+    if (edge_constraint_or_draw_rrt == 2) {
         a_x = a->x; a_y = a->y; b_x = b->x; b_y = b->y;
     }
     int dx = abs(b_x - a_x), dy = -abs(b_y - a_y);
@@ -602,11 +604,13 @@ bool bresenhams_line(RRT_node * a, RRT_node * b, bool edge_constraint_or_draw_rr
     int error = dx + dy;
 
     while (true) {
-        if (!edge_constraint_or_draw_rrt) {
+        if (edge_constraint_or_draw_rrt == 0) {
             if (coarse_map[a_y][a_x])
                 return false;
-        }
-        else if (a_y >= 0 && a_y < MAP_SIZE && a_x >= 0 && a_x < MAP_SIZE) {
+        } else if (edge_constraint_or_draw_rrt == 1) {
+            if (coarse_tree_map[a_y][a_x] == 0)
+                coarse_tree_map[a_y][a_x] = 255;
+        } else if (a_y >= 0 && a_y < MAP_SIZE && a_x >= 0 && a_x < MAP_SIZE) {
             if (map_tree[a_y][a_x] == 0)
                 map_tree[a_y][a_x] = 255;
         }
@@ -625,7 +629,11 @@ bool bresenhams_line(RRT_node * a, RRT_node * b, bool edge_constraint_or_draw_rr
 bool edge_constraints_met(RRT_node * a, RRT_node * b) { // local planner
     if (a == NULL || b == NULL) return false;
 
-    return bresenhams_line(a, b, false);
+    int b_x = b->x, b_y = b->y;
+    if (coarse_tree_map[b_y][b_x] != 0) // collision if 2nd point too near an edge
+        return false;
+
+    return bresenhams_line(a, b, 0);
 }
 
 RRT_node * compute_RRT() {
@@ -647,6 +655,8 @@ RRT_node * compute_RRT() {
             }
 
             node_b->children[node_b->child_cnt++] = node_a;
+            
+            bresenhams_line(node_a, node_b, 1); // draw edge on coarse_map
         } else {
             free(node_a->children);
             free(node_a);
@@ -666,7 +676,7 @@ void draw_RRT_on_map(RRT_node * root) {
         RRT_node * a = RRT_traversal_queue[i];
         for (size_t k = 0; k < a->child_cnt; ++k) {
             RRT_node * b = a->children[k];
-            bresenhams_line(a, b, true);
+            bresenhams_line(a, b, 2);
 
             RRT_traversal_queue[j++] = b;
         }
