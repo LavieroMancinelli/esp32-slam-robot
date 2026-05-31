@@ -20,9 +20,11 @@ uint8_t map[MAP_SIZE][MAP_SIZE] = {0};
 uint8_t map_tree[MAP_SIZE][MAP_SIZE] = {0};
 bool coarse_map[MAP_SIZE / COARSE_RATIO][MAP_SIZE / COARSE_RATIO] = {false};
 bool coarse_tree_map[MAP_SIZE / COARSE_RATIO][MAP_SIZE / COARSE_RATIO] = {false};
+int coarse_indices[(MAP_SIZE / COARSE_RATIO) * (MAP_SIZE / COARSE_RATIO)];
 
 volatile bool slam_restart = true;
-
+int max_coarse_index_length = (MAP_SIZE / COARSE_RATIO) * (MAP_SIZE / COARSE_RATIO);
+    
 
 typedef struct RRT_node {
     int x;
@@ -642,8 +644,18 @@ RRT_node * compute_RRT() {
     memset(coarse_tree_map, 0, sizeof(bool) * ((MAP_SIZE / COARSE_RATIO) * (MAP_SIZE / COARSE_RATIO)));
     RRT_node * root = create_RRT_node_null();
     RRT_node * cur = root;
-    for (size_t i = 0; i < MAXIMUM_RRT_ITERATIONS; ++i) { // try to add a node_a made from random points in space to tree
-        size_t random_map_index = rand() % (MAP_SIZE * MAP_SIZE);
+    int last_coarse_index = max_coarse_index_length-1;
+    while (last_coarse_index >= 0) { // try to add a node_a made from random points in space to tree
+        //size_t random_map_index = rand() % (MAP_SIZE * MAP_SIZE);
+        // select index from array of coarse indices not tried yet, then map this to map index
+        size_t random_coarse_map_index_index = rand() % (last_coarse_index+1);
+        size_t selected_coarse_map_index = coarse_indices[random_coarse_map_index_index];
+        coarse_indices[random_coarse_map_index_index] = coarse_indices[last_coarse_index];
+        coarse_indices[last_coarse_index] = selected_coarse_map_index;
+        size_t random_map_index = selected_coarse_map_index * (COARSE_RATIO * COARSE_RATIO) + 
+                (rand() % (COARSE_RATIO*COARSE_RATIO));
+        --last_coarse_index;
+
         size_t random_map_y = random_map_index / MAP_SIZE, random_map_x = random_map_index % MAP_SIZE;
         RRT_node * node_a = create_RRT_node_vals(random_map_x, random_map_y, cur, 0, 5);
         RRT_node * node_b = find_nearest_RRT_node(root, node_a);
@@ -788,6 +800,11 @@ void app_main(void)
     handle_server_init();
 
     recenter_servo();
+
+    // initializing array of indices of coarse_map
+    for (size_t i = 0; i < max_coarse_index_length; ++i) {
+        coarse_indices[i] = i;
+    }
 
     while (1) {
         if (slam_restart) {
