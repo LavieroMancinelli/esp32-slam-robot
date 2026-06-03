@@ -29,5 +29,6 @@ static const char* TAG = "CarModule";
 #define MAXIMUM_UNCERTAINTY_INVERVAL 0.1 // golden section minimization will stop once angle uncertainty is within 0.1 degrees
 #define MAXIMUM_RRT_ITERATIONS 500 // maximum number of nodes RRT will try to create
 #define COARSE_RATIO 10 // downscaling factor for coarse occupancy grid
+#define PLANNING_ROTATION_TOLERANCE 5.0 // if rotation at least this similar to edge then drive straight
 
 #endif

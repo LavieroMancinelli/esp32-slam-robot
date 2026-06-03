@@ -514,6 +514,32 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
     return new_node;
 }
 
+void motor_toward_goal(RRT_node * goal, double cur_trans[], double cur_rot) {
+    double goal_x = goal->x, goal_y = goal->y, cur_x = cur_trans[0], cur_y = cur_trans[1];
+    double rot_between_points = atan2((goal_y - cur_y), (goal_x - cur_x)) * 180.0 / M_PI;
+    double rot_needed = rot_between_points - cur_rot;
+    double dist_needed = sqrt(pow((goal_x - cur_x), 2) + pow((goal_y - cur_y), 2));
+
+    if (fabs(rot_needed) > PLANNING_ROTATION_TOLERANCE) {   // turn to correct angle
+        if (rot_needed > 0) {
+            changeSpeedA(0, MOVE_SPEED);
+            changeSpeedB(1, MOVE_SPEED);
+        } else {
+            changeSpeedA(1, MOVE_SPEED);
+            changeSpeedB(0, MOVE_SPEED);
+        }
+        vTaskDelay(pdMS_TO_TICKS(500.0 * fabs(rot_needed) / 20.0)); // temporary hardcoded estimate formula
+        changeSpeedA(0, 0);
+        changeSpeedB(0, 0);
+    } else {                                                // drive straight
+        changeSpeedA(0, MOVE_SPEED);
+        changeSpeedB(0, MOVE_SPEED);
+        vTaskDelay(pdMS_TO_TICKS(500.0 * fabs(dist_needed) / 13.0)); // temporary hardcoded estimate formula
+        changeSpeedA(0, 0);
+        changeSpeedB(0, 0);
+    }
+}
+
 void SLAM_run() {
     RangeScanNode * head = create_range_scan_node();
     RangeScanNode * prev = head;
@@ -527,7 +553,7 @@ void SLAM_run() {
         
         // use rrt to compute next pos/rot
         changeSpeedA(0, MOVE_SPEED);
-        changeSpeedB(0, MOVE_SPEED);
+        changeSpeedB(1, MOVE_SPEED);
         vTaskDelay(pdMS_TO_TICKS(MOVE_TIME_PER_STEP));
         changeSpeedA(0, 0);
         changeSpeedB(0, 0);
@@ -535,7 +561,6 @@ void SLAM_run() {
         free_RRT(RRT_root);
     }
 }
-
 
 
 
