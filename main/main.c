@@ -23,7 +23,8 @@ bool coarse_tree_map[MAP_SIZE / COARSE_RATIO][MAP_SIZE / COARSE_RATIO] = {false}
 int coarse_indices[(MAP_SIZE / COARSE_RATIO) * (MAP_SIZE / COARSE_RATIO)];
 
 volatile bool slam_restart = true;
-int max_coarse_index_length = (MAP_SIZE / COARSE_RATIO) * (MAP_SIZE / COARSE_RATIO);
+#define max_coarse_index_length ((MAP_SIZE / COARSE_RATIO) * (MAP_SIZE / COARSE_RATIO))
+int random_values[max_coarse_index_length];
     
 
 typedef struct RRT_node {
@@ -36,8 +37,9 @@ typedef struct RRT_node {
 } RRT_node;
 
 void draw_RRT_on_map(RRT_node *);
-RRT_node * compute_RRT();
+RRT_node * compute_RRT(double *);
 void free_RRT(RRT_node *);
+RRT_node * find_nearest_RRT_node(RRT_node *, int, int);
 
 
 RRT_node * RRT_traversal_queue[MAXIMUM_RRT_ITERATIONS] = {NULL};
@@ -116,8 +118,10 @@ void fill_map_from_points_x_y(double points_x_y[], size_t points_len) {
             continue; // invalid point
         int j = -(int)(y / MAP_RATIO) + MAP_SIZE / 2;
         int k = -(int)(x / MAP_RATIO) + MAP_SIZE / 2;
-        if (j >= 0 && j < MAP_SIZE && k >= 0 && k < MAP_SIZE)
+        if (j >= 0 && j < MAP_SIZE && k >= 0 && k < MAP_SIZE) {
             map[j][k] = iterations+1;
+            map_tree[j][k] = iterations+1; // also draw on tree version of map to update when tree already drawn
+        }
     }
 }
 
@@ -126,12 +130,14 @@ void collect_range_scan(uint16_t points[], int freq, int dur) {
     int i = 0;
     int delay_ms = (double)dur / (double)freq;
 
+    //ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2, (uint32_t)((1500.0 / 20000.0) * ((1 << 10) - 1))); // TEMPORARY WHILE BATTERY DEAD    
     ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2, (uint32_t)((500.0 / 20000.0) * ((1 << 10) - 1)));
     ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2);
     vTaskDelay(pdMS_TO_TICKS(500));
     while (i < freq) {
         // set PWM
         double angle = (double)i / (double)(freq-1) * 180.0 - 90.0;
+        //angle = 0.0; // TEMPORARY WHILE BATTERY DEAD
         //printf("%f\n", angle);
         double pulse_microseconds = 1500.0 + (angle/90.0) * 1000.0;
         // ((1 << 10) - 1) is 1023 10-bit max value, 50hz is 20000 microseconds
@@ -152,7 +158,6 @@ void collect_range_scan(uint16_t points[], int freq, int dur) {
             else
                 distance = 0;
             points[i] = distance;
-            //printf("Distance: %d mm\n", distance);
             VL53L4CD_ClearInterrupt(sensor);
 
         }
@@ -505,7 +510,6 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
     prev->next = new_node;
     
    
-    ++iterations;
     free(local_points_x_y);
     free(combined_x_y_and_pair_dists);
     free(corresp_points_x_y);
@@ -514,30 +518,43 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
     return new_node;
 }
 
-void motor_toward_goal(RRT_node * goal, double cur_trans[], double cur_rot) {
-    double goal_x = goal->x, goal_y = goal->y, cur_x = cur_trans[0], cur_y = cur_trans[1];
-    double rot_between_points = atan2((goal_y - cur_y), (goal_x - cur_x)) * 180.0 / M_PI;
-    double rot_needed = rot_between_points - cur_rot;
-    double dist_needed = sqrt(pow((goal_x - cur_x), 2) + pow((goal_y - cur_y), 2));
+void motor_rotate(double rot_needed) { // rotate rot_needed degrees
+    rot_needed = fabs(rot_needed) <= MAX_ROT_PER_STEP ? rot_needed : (rot_needed > 0 ? MAX_ROT_PER_STEP : -MAX_ROT_PER_STEP);
 
-    if (fabs(rot_needed) > PLANNING_ROTATION_TOLERANCE) {   // turn to correct angle
-        if (rot_needed > 0) {
-            changeSpeedA(0, MOVE_SPEED);
-            changeSpeedB(1, MOVE_SPEED);
-        } else {
-            changeSpeedA(1, MOVE_SPEED);
-            changeSpeedB(0, MOVE_SPEED);
-        }
-        vTaskDelay(pdMS_TO_TICKS(500.0 * fabs(rot_needed) / 20.0)); // temporary hardcoded estimate formula
-        changeSpeedA(0, 0);
-        changeSpeedB(0, 0);
-    } else {                                                // drive straight
+    if (rot_needed < 0) {
         changeSpeedA(0, MOVE_SPEED);
+        changeSpeedB(1, MOVE_SPEED);
+    } else {
+        changeSpeedA(1, MOVE_SPEED);
         changeSpeedB(0, MOVE_SPEED);
-        vTaskDelay(pdMS_TO_TICKS(500.0 * fabs(dist_needed) / 13.0)); // temporary hardcoded estimate formula
-        changeSpeedA(0, 0);
-        changeSpeedB(0, 0);
     }
+    vTaskDelay(pdMS_TO_TICKS(500.0 * fabs(rot_needed) / 20.0)); // temporary hardcoded estimate formula
+    changeSpeedA(0, 0);
+    changeSpeedB(0, 0);
+    
+    printf("rot step %f degrees turned\n", rot_needed);
+}
+
+void motor_straight(double dist_needed) { // rotate rot_needed degrees
+    dist_needed = dist_needed <= MAX_DIST_PER_STEP ? dist_needed : MAX_DIST_PER_STEP;
+
+    changeSpeedA(0, MOVE_SPEED);
+    changeSpeedB(0, MOVE_SPEED);
+    vTaskDelay(pdMS_TO_TICKS(500.0 * fabs(dist_needed) / 13.0)); // temporary hardcoded estimate formula
+    changeSpeedA(0, 0);
+    changeSpeedB(0, 0);
+    
+    printf("dist step %f units moved\n", dist_needed);
+}
+
+RRT_node * next_RRT_node_in_path(RRT_node * root, double goal_pos[]) {
+    RRT_node * cur = find_nearest_RRT_node(root, goal_pos[0], goal_pos[1]);
+    
+    while (cur->parent != NULL && cur->parent->parent != NULL) {
+        cur = cur->parent;
+    }
+
+    return cur;    
 }
 
 void SLAM_run() {
@@ -545,20 +562,65 @@ void SLAM_run() {
     RangeScanNode * prev = head;
     double global_trans[2] = {0};
     double global_rot = 0;
+    double goal_pos[2] = {125, 30}; // temporary hardcoded goal
 
-    while (iterations < 2) {
+    // generate rand values to be reused to improve RRT generation consistency
+    srand(10);
+    for (size_t i = 0; i < max_coarse_index_length; ++i)
+        random_values[i] = rand();
+    
+    // first PLANNING rrt from cur position, if rotation to next edge point is within range
+    // then MOVING, otherwise ROTATING until it is, then MOVING for one step
+    enum {PLANNING, ROTATING, MOVING};
+    int state = PLANNING;
+    double next_world_pos[2] = {};
+    double target_rot = 0;
+    double target_dist = 0;
+
+    while (iterations < 100) {
         prev = SLAM_iteration(prev, global_trans, &global_rot);
-        RRT_node * RRT_root = compute_RRT();
-        draw_RRT_on_map(RRT_root);
-        
-        // use rrt to compute next pos/rot
-        changeSpeedA(0, MOVE_SPEED);
-        changeSpeedB(1, MOVE_SPEED);
-        vTaskDelay(pdMS_TO_TICKS(MOVE_TIME_PER_STEP));
-        changeSpeedA(0, 0);
-        changeSpeedB(0, 0);
+        ++iterations;
 
-        free_RRT(RRT_root);
+        if (state == PLANNING) {
+            double cur_map_pos[2] = {
+                -(global_trans[0] / MAP_RATIO) + MAP_SIZE / 2, -(global_trans[1] / MAP_RATIO) + MAP_SIZE / 2
+            };
+            RRT_node * RRT_root = compute_RRT(cur_map_pos);
+            draw_RRT_on_map(RRT_root);
+
+            // find path in RRT
+            RRT_node * next_node = next_RRT_node_in_path(RRT_root, goal_pos);
+            next_world_pos[0] = -(next_node->x - MAP_SIZE / 2) * MAP_RATIO;
+            next_world_pos[1] = -(next_node->y - MAP_SIZE / 2) * MAP_RATIO;
+            printf("root: %d,%d next: %d,%d\n", RRT_root->x, RRT_root->y, next_node->x, next_node->y);
+            map_tree[(int)goal_pos[1]][(int)goal_pos[0]] = 253;     // draw goal on map
+            map_tree[(int)next_node->y][(int)next_node->x] = 254;   // draw next node endpoint on map
+
+            // to move towards next node endpoint, decide whether to rotate or move straight
+            double goal_x = next_world_pos[0], goal_y = next_world_pos[1], cur_x = global_trans[0], cur_y = global_trans[1];
+            double rot_needed = atan2((goal_y - cur_y), (goal_x - cur_x)) * 180.0 / M_PI;
+            double dist_needed = sqrt(pow((goal_x - cur_x), 2) + pow((goal_y - cur_y), 2));
+            if (fabs(rot_needed) > PLANNING_ROTATION_TOLERANCE) {
+                target_rot = rot_needed;
+                state = ROTATING;
+            } else {
+                target_dist = dist_needed;
+                state = MOVING;
+            }
+
+            free_RRT(RRT_root);
+        } else if (state == ROTATING) {
+            double rot_needed = target_rot - global_rot;
+            if (fabs(rot_needed) > PLANNING_ROTATION_TOLERANCE) {
+                motor_rotate(rot_needed);
+            } else {
+                state = MOVING;
+            }
+        } else if (state == MOVING) {
+            motor_straight(target_dist);
+            state = PLANNING;
+        }
+
     }
 }
 
@@ -586,11 +648,10 @@ RRT_node * create_RRT_node_null() {
     return node;
 }
 
-RRT_node * find_nearest_RRT_node(RRT_node * root, RRT_node * a) {
+RRT_node * find_nearest_RRT_node(RRT_node * root, int a_x, int a_y) {
     size_t i = 0, j = 1; // j size of filled portion
     RRT_traversal_queue[0] = root;
 
-    int a_x = a->x, a_y = a->y;
     double closest_dist_to_a = DBL_MAX;
     RRT_node * closest_node_to_a = NULL;
     while (i < j) {
@@ -664,16 +725,22 @@ bool edge_constraints_met(RRT_node * a, RRT_node * b) { // local planner
     return bresenhams_line(a, b, 0);
 }
 
-RRT_node * compute_RRT() {
+RRT_node * compute_RRT(double root_pos[]) {
+    // reset coarse_indices
+    for (size_t i = 0; i < max_coarse_index_length; ++i)
+        coarse_indices[i] = i;
+
     fill_coarse_map();
     memset(coarse_tree_map, 0, sizeof(bool) * ((MAP_SIZE / COARSE_RATIO) * (MAP_SIZE / COARSE_RATIO)));
-    RRT_node * root = create_RRT_node_null();
+    RRT_node * root = create_RRT_node_vals(root_pos[0], root_pos[1], NULL, 0, 5);
     RRT_node * cur = root;
     int last_coarse_index = max_coarse_index_length-1;
+    int i = 0;
     while (last_coarse_index >= 0) { // try to add a node_a made from random points in space to tree
         //size_t random_map_index = rand() % (MAP_SIZE * MAP_SIZE);
         // select index from array of coarse indices not tried yet, then map this to map index
-        size_t random_coarse_map_index_index = rand() % (last_coarse_index+1);
+        //size_t random_coarse_map_index_index = rand() % (last_coarse_index+1);
+        size_t random_coarse_map_index_index = random_values[i++] % (last_coarse_index+1);
         size_t selected_coarse_map_index = coarse_indices[random_coarse_map_index_index];
         coarse_indices[random_coarse_map_index_index] = coarse_indices[last_coarse_index];
         coarse_indices[last_coarse_index] = selected_coarse_map_index;
@@ -683,7 +750,7 @@ RRT_node * compute_RRT() {
 
         size_t random_map_y = random_map_index / MAP_SIZE, random_map_x = random_map_index % MAP_SIZE;
         RRT_node * node_a = create_RRT_node_vals(random_map_x, random_map_y, cur, 0, 5);
-        RRT_node * node_b = find_nearest_RRT_node(root, node_a);
+        RRT_node * node_b = find_nearest_RRT_node(root, node_a->x, node_a->y);
 
         if (edge_constraints_met(node_a, node_b)) { // add node_a to tree
             node_a->parent = node_b;
@@ -710,6 +777,8 @@ void draw_RRT_on_map(RRT_node * root) {
     size_t i = 0, j = 1; // j size of filled portion
     RRT_traversal_queue[0] = root;
 
+    
+    map_tree[root->y][root->x] = 254;
     
     while (i < j) {
         RRT_node * a = RRT_traversal_queue[i];
@@ -738,6 +807,7 @@ void free_RRT(RRT_node * root) {
     }
 
     for (size_t k = 0; k < j; ++k) {
+        free(RRT_traversal_queue[k]->children);
         free(RRT_traversal_queue[k]);
     }
 }

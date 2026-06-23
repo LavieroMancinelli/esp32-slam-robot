@@ -71,7 +71,10 @@ static esp_err_t index_handler(httpd_req_t *req) {
         "           else if (data[i] == 2) values = [0, 0, 255, 255];"
         "           else if (data[i] == 3) values = [255, 0, 255, 255];"
         "           else if (data[i] == 4) values = [0, 255, 0, 255];"
+        "           else if (data[i] == 253) values = [255, 150, 0, 255];"
+        "           else if (data[i] == 254) values = [0, 255, 255, 255];"
         "           else if (data[i] == 255) values = [150, 150, 150, 255];"
+        "           else if (data[i] != 0) values = [0, 0, 0, 255];"
         "           return values;"
         "       }"
         "       for (let i = 0; i < 250 * 250; i++) {" // MAP_SIZE 250
