@@ -1,6 +1,9 @@
 #include "wifi.h"
 
 extern volatile bool slam_restart;
+extern volatile bool manual_left;
+extern volatile bool manual_forward;
+extern volatile bool manual_right;
 
 static void wifi_event_handler(void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data) {
     printf("Event nr: %ld!\n", event_id);
@@ -57,6 +60,10 @@ static esp_err_t index_handler(httpd_req_t *req) {
         "<body style='background:gray'>"
         "   <canvas id='map' width='250' height='250' style='border:2px solid red; width: 1000px; height: 1000px; image-rendering: pixelated; margin: auto;'></canvas>"
         "   <button onclick='restartSlam()'>Restart</button>"
+        "   <div>MANUAL CONTROLS:</div>"
+        "   <button onclick='manualLeft()'>Turn Left</button>"
+        "   <button onclick='manualForward()'>Go Forward</button>"
+        "   <button onclick='manualRight()'>Turn Right</button>"
         "   <script>"
         "   async function updateMap() {"
         "       const response = await fetch('/map');"
@@ -86,9 +93,10 @@ static esp_err_t index_handler(httpd_req_t *req) {
         "       }"
         "       ctx.putImageData(imageData, 0, 0);"
         "   }"
-        "   async function restartSlam() {"
-        "       await fetch('/restart');"
-        "   }"
+        "   async function restartSlam() { await fetch('/restart'); }"
+        "   async function manualLeft() { await fetch('/left'); }"
+        "   async function manualForward() { await fetch('/forward'); }"
+        "   async function manualRight() { await fetch('/right'); }"
         "   setInterval(updateMap, 250);"
         "   updateMap();"
         "   </script>"
@@ -120,9 +128,10 @@ static const httpd_uri_t index_uri = {
 
 static esp_err_t restart_slam_handler(httpd_req_t *req) {
     httpd_resp_sendstr(req, "ok");
+    printf("SIGNAL: RESTARTING");
     slam_restart = true;
     return ESP_OK;
-}
+};
 
 static const httpd_uri_t restart_slam_uri = {
     .uri        = "/restart",
@@ -130,6 +139,47 @@ static const httpd_uri_t restart_slam_uri = {
     .handler    = restart_slam_handler,
     .user_ctx   = NULL
 };
+
+
+static esp_err_t left_handler(httpd_req_t *req) {
+    httpd_resp_sendstr(req, "ok");
+    printf("SIGNAL: TURN LEFT");
+    manual_left = true;
+    return ESP_OK;
+}
+static const httpd_uri_t manual_left_uri = {
+    .uri        = "/left",
+    .method     = HTTP_GET,
+    .handler    = left_handler,
+    .user_ctx   = NULL
+};
+
+static esp_err_t forward_handler(httpd_req_t *req) {
+    httpd_resp_sendstr(req, "ok");
+    printf("SIGNAL: MOVE FORWARD");
+    manual_forward = true;
+    return ESP_OK;
+}
+static const httpd_uri_t manual_forward_uri = {
+    .uri        = "/forward",
+    .method     = HTTP_GET,
+    .handler    = forward_handler,
+    .user_ctx   = NULL
+};
+
+static esp_err_t right_handler(httpd_req_t *req) {
+    httpd_resp_sendstr(req, "ok");
+    printf("SIGNAL: TURN RIGHT");
+    manual_right = true;
+    return ESP_OK;
+}
+static const httpd_uri_t manual_right_uri = {
+    .uri        = "/right",
+    .method     = HTTP_GET,
+    .handler    = right_handler,
+    .user_ctx   = NULL
+};
+
 
 void handle_server_init() {
     wifi_init_softap();
@@ -140,8 +190,14 @@ void handle_server_init() {
         esp_err_t r1 = httpd_register_uri_handler(server, &index_uri);
         esp_err_t r2 = httpd_register_uri_handler(server, &map_uri);
         esp_err_t r3 = httpd_register_uri_handler(server, &restart_slam_uri);
+        esp_err_t r4 = httpd_register_uri_handler(server, &manual_left_uri);
+        esp_err_t r5 = httpd_register_uri_handler(server, &manual_forward_uri);
+        esp_err_t r6 = httpd_register_uri_handler(server, &manual_right_uri);
         printf("index handler registered: %d\n", r1);
         printf("map handler registered: %d\n", r2);
         printf("restart handler registered: %d\n", r3);
+        printf("manual left handler registered: %d\n", r4);
+        printf("manual forward handler registered: %d\n", r5);
+        printf("manual rightt handler registered: %d\n", r6);
     }
 }

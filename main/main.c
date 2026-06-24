@@ -22,7 +22,7 @@ bool coarse_map[MAP_SIZE / COARSE_RATIO][MAP_SIZE / COARSE_RATIO] = {false};
 bool coarse_tree_map[MAP_SIZE / COARSE_RATIO][MAP_SIZE / COARSE_RATIO] = {false};
 int coarse_indices[(MAP_SIZE / COARSE_RATIO) * (MAP_SIZE / COARSE_RATIO)];
 
-volatile bool slam_restart = true;
+volatile bool slam_restart = true, manual_left = false, manual_right = false, manual_forward = false;
 #define max_coarse_index_length ((MAP_SIZE / COARSE_RATIO) * (MAP_SIZE / COARSE_RATIO))
 int random_values[max_coarse_index_length];
     
@@ -165,6 +165,16 @@ void collect_range_scan(uint16_t points[], int freq, int dur) {
         vTaskDelay(pdMS_TO_TICKS(delay_ms > MIN_SENSOR_INTERVAL ? delay_ms : MIN_SENSOR_INTERVAL));
         ++i;
     } 
+
+    // discard outliers based on distance disconinuities
+    i = 1;
+    while (i < freq) {
+        if (i < freq-1 && points[i-1] == 0 && points[i+1] == 0) // no neighbors
+            points[i] = 0;
+        if (points[i-1] != 0 && abs(points[i] - points[i-1]) >= SPIKE_THRESHOLD) // dist to last
+            points[i-1] = 0;
+        ++i;
+    }
     
     recenter_servo();
 }
@@ -557,6 +567,70 @@ RRT_node * next_RRT_node_in_path(RRT_node * root, double goal_pos[]) {
     return cur;    
 }
 
+void next_coarse_path_node(double start_pos[], double goal_pos[], int next_coarse_pos[]) {
+    const int coarse_map_width = (MAP_SIZE / COARSE_RATIO);
+    int coarse_start_pos[2] = {start_pos[0] / COARSE_RATIO, start_pos[1] / COARSE_RATIO};
+    int coarse_goal = (goal_pos[1] / COARSE_RATIO) * coarse_map_width + (goal_pos[0] / COARSE_RATIO);
+
+
+    // do BFS of cells in coarse map to find goal
+    int * queue = malloc(sizeof(int) * coarse_map_width * coarse_map_width);
+    size_t queue_pos = 0, queue_end = 1;
+    bool * visited = malloc(sizeof(bool) * coarse_map_width * coarse_map_width);
+    int * parent = malloc(sizeof(int) * coarse_map_width * coarse_map_width);
+    memset(visited, 0, sizeof(bool) * (coarse_map_width * coarse_map_width));
+    memset(parent, -1, sizeof(int) * (coarse_map_width * coarse_map_width));
+
+    int coarse_start = coarse_start_pos[1] * coarse_map_width + coarse_start_pos[0];
+    visited[coarse_start] = true;
+    queue[0] = coarse_start;
+    parent[coarse_start] = -1;
+
+
+    while (queue_pos < queue_end) {
+        int cur = queue[queue_pos++];
+        if (cur == coarse_goal) { // found goal
+            int next = cur;
+            while (parent[cur] != -1) { // trace path to parent
+                next = cur;
+                cur = parent[cur];
+            }
+            next_coarse_pos[0] = next % coarse_map_width; // x
+            next_coarse_pos[1] = next / coarse_map_width; // y
+
+            free(queue); 
+            free(visited);
+            free(parent);
+            return;
+        }
+
+        int cur_y = cur / coarse_map_width, cur_x = cur % coarse_map_width; 
+        for (int i = -1; i <= 1; ++i) { // add each neighbor to queue
+            for (int j = -1; j <= 1; ++j) {
+                if (i == 0 && j == 0) continue; // skip self
+                int neighbor_y = cur_y + i, neighbor_x = cur_x + j;
+                if (neighbor_y < 0 || neighbor_x < 0 || neighbor_y >= coarse_map_width || neighbor_x >= coarse_map_width
+                    || coarse_map[neighbor_y][neighbor_x]) continue; // skip if neighbor OOB or obstacle
+                int neighbor = neighbor_y * coarse_map_width + neighbor_x;
+                if (visited[neighbor]) continue; // skip if already visited neighbor
+                if (queue_end >= coarse_map_width * coarse_map_width) continue; // skip if queue full
+                visited[neighbor] = true;
+                queue[queue_end++] = neighbor;
+                parent[neighbor] = cur;
+            }
+        }
+        
+        visited[cur] = true;
+    }
+    
+    // no path to goal found
+    next_coarse_pos[0] = coarse_start_pos[0];
+    next_coarse_pos[1] = coarse_start_pos[1];
+    free(queue); 
+    free(visited);
+    free(parent);
+}
+
 void SLAM_run() {
     RangeScanNode * head = create_range_scan_node();
     RangeScanNode * prev = head;
@@ -573,11 +647,13 @@ void SLAM_run() {
     // then MOVING, otherwise ROTATING until it is, then MOVING for one step
     enum {PLANNING, ROTATING, MOVING};
     int state = PLANNING;
+    int next_coarse_pos[2] = {};
     double next_world_pos[2] = {};
     double target_rot = 0;
     double target_dist = 0;
 
     while (iterations < 100) {
+        if (slam_restart) break;
         prev = SLAM_iteration(prev, global_trans, &global_rot);
         ++iterations;
 
@@ -608,15 +684,23 @@ void SLAM_run() {
                 state = MOVING;
             }
 
+            printf("COMPUTING: rot_needed: %f dist_needed: %f\n", rot_needed, dist_needed);
             free_RRT(RRT_root);
-        } else if (state == ROTATING) {
+        } 
+        
+        if (state == ROTATING) {
             double rot_needed = target_rot - global_rot;
+            //while (rot_needed > 180.0) rot_needed -= 360.0;
+            //while (rot_needed < -180.0) rot_needed += 360.0;
+            printf("ROTATING: rot_needed: %f\n", rot_needed);
             if (fabs(rot_needed) > PLANNING_ROTATION_TOLERANCE) {
                 motor_rotate(rot_needed);
             } else {
                 state = MOVING;
             }
-        } else if (state == MOVING) {
+        } 
+        if (state == MOVING) {
+            printf("MOVING: target_dist: %f\n", target_dist);
             motor_straight(target_dist);
             state = PLANNING;
         }
@@ -813,6 +897,36 @@ void free_RRT(RRT_node * root) {
 }
 
 
+void manual_control() {
+    RangeScanNode * head = create_range_scan_node();
+    RangeScanNode * prev = head;
+    double global_trans[2] = {0};
+    double global_rot = 0;
+    memcpy(map_tree, map, sizeof(uint8_t) * MAP_SIZE * MAP_SIZE);
+
+    while (1) {
+        while (!slam_restart && !manual_left && !manual_forward && !manual_right) vTaskDelay(pdMS_TO_TICKS(50));
+        if (slam_restart) {
+            break;
+        }
+        if (manual_left) {
+            motor_rotate(-20.0);
+            manual_left = false;
+        }
+        if (manual_right) {
+            motor_rotate(20.0);
+            manual_right = false;
+        }
+        if (manual_forward) {
+            motor_straight(20.0);
+            manual_forward = false;
+        }
+        prev = SLAM_iteration(prev, global_trans, &global_rot);
+        memcpy(map_tree, map, sizeof(uint8_t) * MAP_SIZE * MAP_SIZE);
+        ++iterations;
+    }
+}
+
 void app_main(void) 
 {
     gpio_config_t io_config = {
@@ -907,7 +1021,8 @@ void app_main(void)
             printf("restarting slam\n");
             iterations = 0;
             memset(map, 0, sizeof(map));
-            SLAM_run();
+            //SLAM_run();
+            manual_control();
         }
         vTaskDelay(pdMS_TO_TICKS(100));
     };
