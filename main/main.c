@@ -153,6 +153,7 @@ void collect_range_scan(uint16_t points[], int freq, int dur) {
             VL53L4CD_GetResult(sensor, &result);
             if (result.range_status == 0) { 
                 distance = result.distance_mm;
+                if (distance < 20) distance = 0;
                 //fill_map_from_point(distance, i); // TO DISPLAY POINTS DIRECTLY UNCOMMENT THIS AND COMMENT FILL_MAP_FROM IN COMPARE_LANDMARKS
             }
             else
@@ -175,6 +176,9 @@ void collect_range_scan(uint16_t points[], int freq, int dur) {
             points[i-1] = 0;
         ++i;
     }
+    
+    if (points[1] == 0) points[0] = 0; // no neighbor discard for first and last points in scan
+    if (points[freq-2] == 0) points[freq-1] = 0;
     
     recenter_servo();
 }
@@ -282,7 +286,7 @@ void get_normal_from_tangent(double * normal_x, double * normal_y, double points
 }
 
 // 2
-void compute_correspondence_pairs(double points_x_y[], size_t points_len, double old_points_x_y[], double corresp_points_x_y[], int g_angle, int * num_pairs, int * num_outliers, double combined_x_y_and_pair_dists[]) {
+void compute_correspondence_pairs(double points_x_y[], size_t points_len, double old_points_x_y[], double corresp_points_x_y[], double g_angle, int * num_pairs, int * num_outliers, double combined_x_y_and_pair_dists[]) {
     for (size_t i = 0; i < points_len; ++i) {
         if (points_x_y[2*i] == 0.0 && points_x_y[2*i+1] == 0.0) continue;
         double x1 = points_x_y[2*i];
@@ -386,10 +390,11 @@ void compute_correspondence_pairs(double points_x_y[], size_t points_len, double
 
 // 3
 double compute_total_matching_distance(double points_x_y[], double corresp_points_x_y[], size_t points_len, int num_pairs, int num_outliers, double combined_x_y_and_pair_dists[], double * found_Tx, double * found_Ty) {
+    if (num_pairs + num_outliers == 0) return DBL_MAX; // safety against div by 0
+
+    
     double ATA[2][2] = {0};
     double ATb[2] = {0};
-    
-    if (num_pairs + num_outliers == 0) return DBL_MAX; // safety against div by 0
 
     // -> solve E(ω,T) = sum(Cxi Tx + Cyi Ty = Di) for optimal T using least squares (A^T)A * T = (A^T)b
     for (size_t i = 0; i < points_len; ++i) {
@@ -447,6 +452,48 @@ RangeScanNode* create_range_scan_node() {
     return new_node;
 }
 
+double gs_search_for_angle(double gs_lower_bound, double gs_upper_bound, double * optimal_rot, double local_points_x_y[], double prev_points_x_y[], double corresp_points_x_y[], double combined_x_y_and_pair_dists[]) {
+    double r = (sqrt(5.0) - 1.0) / 2.0;
+    double delta_Tx_1 = 0.0, delta_Ty_1 = 0.0, delta_Tx_2 = 0.0, delta_Ty_2 = 0.0;
+    int num_pairs = 0, num_outliers = 0;
+    while (fabs(gs_upper_bound - gs_lower_bound) > MAXIMUM_UNCERTAINTY_INVERVAL) {
+        double x1 = gs_upper_bound - r * (gs_upper_bound - gs_lower_bound);
+        double x2 = gs_lower_bound + r * (gs_upper_bound - gs_lower_bound);
+
+        double test_rot = x1;
+
+        memset(corresp_points_x_y, 0, SENSOR_FREQ * sizeof(double) * 2);
+        memset(combined_x_y_and_pair_dists, 0, SENSOR_FREQ * sizeof(double) * 3);
+        num_pairs = 0; num_outliers = 0;
+        compute_correspondence_pairs(local_points_x_y, SENSOR_FREQ, prev_points_x_y, corresp_points_x_y, test_rot, &num_pairs, &num_outliers, combined_x_y_and_pair_dists);
+        double tmd_1 = compute_total_matching_distance(local_points_x_y, corresp_points_x_y, SENSOR_FREQ, num_pairs, num_outliers, combined_x_y_and_pair_dists, &delta_Tx_1, &delta_Ty_1);
+
+
+        test_rot = x2;
+
+        memset(corresp_points_x_y, 0, SENSOR_FREQ * sizeof(double) * 2);
+        memset(combined_x_y_and_pair_dists, 0, SENSOR_FREQ * sizeof(double) * 3);
+        num_pairs = 0; num_outliers = 0;
+        compute_correspondence_pairs(local_points_x_y, SENSOR_FREQ, prev_points_x_y, corresp_points_x_y, test_rot, &num_pairs, &num_outliers, combined_x_y_and_pair_dists);
+        double tmd_2 = compute_total_matching_distance(local_points_x_y, corresp_points_x_y, SENSOR_FREQ, num_pairs, num_outliers, combined_x_y_and_pair_dists, &delta_Tx_2, &delta_Ty_2);
+        
+        
+        if (tmd_1 < tmd_2) {
+            gs_upper_bound = x2;
+        } else {
+            gs_lower_bound = x1;
+        }
+    }
+
+    *optimal_rot = (gs_lower_bound + gs_upper_bound) / 2.0;
+    double final_Tx = 0.0, final_Ty = 0.0;
+    memset(corresp_points_x_y, 0, SENSOR_FREQ * sizeof(double) * 2);
+    memset(combined_x_y_and_pair_dists, 0, SENSOR_FREQ * sizeof(double) * 3);
+    num_pairs = 0; num_outliers = 0;
+    compute_correspondence_pairs(local_points_x_y, SENSOR_FREQ, prev_points_x_y, corresp_points_x_y, *optimal_rot, &num_pairs, &num_outliers, combined_x_y_and_pair_dists);
+    return compute_total_matching_distance(local_points_x_y, corresp_points_x_y, SENSOR_FREQ, num_pairs, num_outliers, combined_x_y_and_pair_dists, &delta_Tx_2, &delta_Ty_2);
+}
+
 RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * g_rot) {
     uint16_t *points = malloc(SENSOR_FREQ * sizeof(uint16_t)); // polar form: magnitude as value, angle implicit from index
     double *local_points_x_y = malloc(SENSOR_FREQ * sizeof(double) * 2);
@@ -461,47 +508,54 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
     double trans_zero[2] = {0.0, 0.0};
     transform_points(points, local_points_x_y, SENSOR_FREQ, trans_zero, 0.0);
     if (iterations > 0) {
-        // golden section search to find ω that minimizes total_matching_distance
-        double r = (sqrt(5.0) - 1.0) / 2.0;
-        double delta_Tx_1 = 0.0, delta_Ty_1 = 0.0, delta_Tx_2 = 0.0, delta_Ty_2 = 0.0;
-        while (fabs(gs_upper_bound - gs_lower_bound) > MAXIMUM_UNCERTAINTY_INVERVAL) {
-            double x1 = gs_upper_bound - r * (gs_upper_bound - gs_lower_bound);
-            double x2 = gs_lower_bound + r * (gs_upper_bound - gs_lower_bound);
-
-            double test_rot = x1;
-
+        // use multi-hypothesis to find best angle to center golden section search around
+        double best_tmd = DBL_MAX;
+        double best_rot = 0.0;
+        int num_coarse = 9;  // try 9 angles: -40, -30, -20, -10, 0, 10, 20, 30, 40
+        double delta_Tx_tmp = 0, delta_Ty_tmp = 0;
+        for (int s = 0; s < num_coarse; ++s) {
+            double test_rot = -40.0 + s * (80.0 / (num_coarse - 1));
             memset(corresp_points_x_y, 0, SENSOR_FREQ * sizeof(double) * 2);
             memset(combined_x_y_and_pair_dists, 0, SENSOR_FREQ * sizeof(double) * 3);
             num_pairs = 0; num_outliers = 0;
             compute_correspondence_pairs(local_points_x_y, SENSOR_FREQ, prev->points_x_y, corresp_points_x_y, test_rot, &num_pairs, &num_outliers, combined_x_y_and_pair_dists);
-            double tmd_1 = compute_total_matching_distance(local_points_x_y, corresp_points_x_y, SENSOR_FREQ, num_pairs, num_outliers, combined_x_y_and_pair_dists, &delta_Tx_1, &delta_Ty_1);
-
-
-            test_rot = x2;
-
-            memset(corresp_points_x_y, 0, SENSOR_FREQ * sizeof(double) * 2);
-            memset(combined_x_y_and_pair_dists, 0, SENSOR_FREQ * sizeof(double) * 3);
-            num_pairs = 0; num_outliers = 0;
-            compute_correspondence_pairs(local_points_x_y, SENSOR_FREQ, prev->points_x_y, corresp_points_x_y, test_rot, &num_pairs, &num_outliers, combined_x_y_and_pair_dists);
-            double tmd_2 = compute_total_matching_distance(local_points_x_y, corresp_points_x_y, SENSOR_FREQ, num_pairs, num_outliers, combined_x_y_and_pair_dists, &delta_Tx_2, &delta_Ty_2);
-            
-            
-            if (tmd_1 < tmd_2) {
-                gs_upper_bound = x2;
-            } else {
-                gs_lower_bound = x1;
+            double tmd = compute_total_matching_distance(local_points_x_y, corresp_points_x_y, SENSOR_FREQ, num_pairs, num_outliers, combined_x_y_and_pair_dists, &delta_Tx_tmp, &delta_Ty_tmp);
+            if (tmd < best_tmd) {
+                best_tmd = tmd;
+                best_rot = test_rot;
             }
         }
-        
-        // compute T that minimizes error given found ω
-        double optimal_rot = (gs_lower_bound + gs_upper_bound) / 2.0;
+
+        // golden section search to find ω that minimizes total_matching_distance
+        double refine_range = 10.0;  // search +-10 degrees around best coarse angle
+        double optimal_rot = 0.0;
+        gs_search_for_angle(best_rot - refine_range, best_rot + refine_range, &optimal_rot, local_points_x_y, prev->points_x_y, corresp_points_x_y, combined_x_y_and_pair_dists);
+
+        // compute T that minimizes error given found ω using point-to-point ICP: T = mean(P*) - mean(Rω * P1)
         double final_Tx = 0.0, final_Ty = 0.0;
         memset(corresp_points_x_y, 0, SENSOR_FREQ * sizeof(double) * 2);
         memset(combined_x_y_and_pair_dists, 0, SENSOR_FREQ * sizeof(double) * 3);
         num_pairs = 0; num_outliers = 0;
         compute_correspondence_pairs(local_points_x_y, SENSOR_FREQ, prev->points_x_y, corresp_points_x_y, optimal_rot, &num_pairs, &num_outliers, combined_x_y_and_pair_dists);
-        compute_total_matching_distance(local_points_x_y, corresp_points_x_y, SENSOR_FREQ, num_pairs, num_outliers, combined_x_y_and_pair_dists, &final_Tx, &final_Ty);
-            
+        double sum_corresp_x = 0, sum_corresp_y = 0;
+        double sum_rot_x = 0, sum_rot_y = 0;
+        int count = 0;
+        for (size_t i = 0; i < SENSOR_FREQ; ++i) {
+            if (local_points_x_y[2*i] == 0.0 || local_points_x_y[2*i+1] == 0.0 || corresp_points_x_y[2*i] == 0.0 || corresp_points_x_y[2*i+1] == 0.0)
+                continue;
+            double rot_x = cos(optimal_rot * M_PI/180) * local_points_x_y[2*i] - sin(optimal_rot * M_PI/180) * local_points_x_y[2*i+1];
+            double rot_y = sin(optimal_rot * M_PI/180) * local_points_x_y[2*i] + cos(optimal_rot * M_PI/180) * local_points_x_y[2*i+1];
+            sum_corresp_x += corresp_points_x_y[2*i];
+            sum_corresp_y += corresp_points_x_y[2*i+1];
+            sum_rot_x += rot_x;
+            sum_rot_y += rot_y;
+            ++count;
+        }
+        if (count > 0) {
+            final_Tx = (sum_corresp_x - sum_rot_x) / count;
+            final_Ty = (sum_corresp_y - sum_rot_y) / count;
+        }
+
         // update the global trans and rot variables with found ω and T
         *g_rot += optimal_rot;
         g_trans[0] += final_Tx;

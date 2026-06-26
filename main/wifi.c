@@ -128,7 +128,7 @@ static const httpd_uri_t index_uri = {
 
 static esp_err_t restart_slam_handler(httpd_req_t *req) {
     httpd_resp_sendstr(req, "ok");
-    printf("SIGNAL: RESTARTING");
+    printf("SIGNAL: RESTARTING\n");
     slam_restart = true;
     return ESP_OK;
 };
@@ -143,7 +143,7 @@ static const httpd_uri_t restart_slam_uri = {
 
 static esp_err_t left_handler(httpd_req_t *req) {
     httpd_resp_sendstr(req, "ok");
-    printf("SIGNAL: TURN LEFT");
+    printf("SIGNAL: TURN LEFT\n");
     manual_left = true;
     return ESP_OK;
 }
@@ -156,7 +156,7 @@ static const httpd_uri_t manual_left_uri = {
 
 static esp_err_t forward_handler(httpd_req_t *req) {
     httpd_resp_sendstr(req, "ok");
-    printf("SIGNAL: MOVE FORWARD");
+    printf("SIGNAL: MOVE FORWARD\n");
     manual_forward = true;
     return ESP_OK;
 }
@@ -169,7 +169,7 @@ static const httpd_uri_t manual_forward_uri = {
 
 static esp_err_t right_handler(httpd_req_t *req) {
     httpd_resp_sendstr(req, "ok");
-    printf("SIGNAL: TURN RIGHT");
+    printf("SIGNAL: TURN RIGHT\n");
     manual_right = true;
     return ESP_OK;
 }
