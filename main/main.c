@@ -621,28 +621,66 @@ RRT_node * next_RRT_node_in_path(RRT_node * root, double goal_pos[]) {
     return cur;    
 }
 
+typedef struct AStarNode {
+    int i;
+    double f; // g + h
+    bool open;
+} AStarNode;
+
+AStarNode create_A_star_node(int i, double f, bool open, int parent) {
+    AStarNode node;
+    node.i = i; 
+    node.f = f; 
+    node.open = open;
+    return node; 
+}
+
+double euclidean_flat_dist(double a_x, double a_y, double b_x, double b_y) {
+    return sqrt(pow(b_x-a_x, 2) +  pow(b_y-a_y, 2));
+}
+
+int find_min_f(AStarNode * open, int len) {
+    double min_f = DBL_MAX;
+    int min_f_i = 0;
+    for (int i = 0; i < len; ++i) {
+        if (open[i].f < min_f && open[i].open) {
+            min_f_i = i;
+            min_f = open[i].f;
+        }
+    }
+    return min_f_i;
+}
+
 void next_coarse_path_node(double start_pos[], double goal_pos[], int next_coarse_pos[]) {
     const int coarse_map_width = (MAP_SIZE / COARSE_RATIO);
     int coarse_start_pos[2] = {start_pos[0] / COARSE_RATIO, start_pos[1] / COARSE_RATIO};
+    int coarse_goal_pos[2] = {goal_pos[0] / COARSE_RATIO, goal_pos[1] / COARSE_RATIO};
     int coarse_goal = (goal_pos[1] / COARSE_RATIO) * coarse_map_width + (goal_pos[0] / COARSE_RATIO);
+    int total_coarse_cells = coarse_map_width * coarse_map_width;
 
+    // do A* on cells in coarse map to find goal
+    AStarNode * open = malloc(sizeof(AStarNode) * total_coarse_cells);
+    int * parent = malloc(sizeof(int) * total_coarse_cells);
+    double * g_score = malloc(sizeof(double) * total_coarse_cells);
+    for (int i = 0; i < total_coarse_cells; ++i) {
+        open[i].open = false;
+        open[i].f = DBL_MAX;
+        open[i].i = i;
 
-    // do BFS of cells in coarse map to find goal
-    int * queue = malloc(sizeof(int) * coarse_map_width * coarse_map_width);
-    size_t queue_pos = 0, queue_end = 1;
-    bool * visited = malloc(sizeof(bool) * coarse_map_width * coarse_map_width);
-    int * parent = malloc(sizeof(int) * coarse_map_width * coarse_map_width);
-    memset(visited, 0, sizeof(bool) * (coarse_map_width * coarse_map_width));
-    memset(parent, -1, sizeof(int) * (coarse_map_width * coarse_map_width));
+        parent[i] = -1;
+        g_score[i] = DBL_MAX;
+    }
 
     int coarse_start = coarse_start_pos[1] * coarse_map_width + coarse_start_pos[0];
-    visited[coarse_start] = true;
-    queue[0] = coarse_start;
-    parent[coarse_start] = -1;
+    open[coarse_start].f = euclidean_flat_dist(coarse_start_pos[0], coarse_start_pos[1], coarse_goal_pos[0], coarse_goal_pos[1]);
+    open[coarse_start].open = true;
+    g_score[coarse_start] = 0.0;
 
 
-    while (queue_pos < queue_end) {
-        int cur = queue[queue_pos++];
+    while (true) {
+        int cur = find_min_f(open, total_coarse_cells);
+        if (!open[cur].open) break; // no open nodes left
+        open[cur].open = false;
         if (cur == coarse_goal) { // found goal
             int next = cur;
             while (parent[cur] != -1) { // trace path to parent
@@ -652,8 +690,8 @@ void next_coarse_path_node(double start_pos[], double goal_pos[], int next_coars
             next_coarse_pos[0] = next % coarse_map_width; // x
             next_coarse_pos[1] = next / coarse_map_width; // y
 
-            free(queue); 
-            free(visited);
+            free(open); 
+            free(g_score);
             free(parent);
             return;
         }
@@ -666,22 +704,25 @@ void next_coarse_path_node(double start_pos[], double goal_pos[], int next_coars
                 if (neighbor_y < 0 || neighbor_x < 0 || neighbor_y >= coarse_map_width || neighbor_x >= coarse_map_width
                     || coarse_map[neighbor_y][neighbor_x]) continue; // skip if neighbor OOB or obstacle
                 int neighbor = neighbor_y * coarse_map_width + neighbor_x;
-                if (visited[neighbor]) continue; // skip if already visited neighbor
-                if (queue_end >= coarse_map_width * coarse_map_width) continue; // skip if queue full
-                visited[neighbor] = true;
-                queue[queue_end++] = neighbor;
-                parent[neighbor] = cur;
+                if (!open[neighbor].open && open[neighbor].f != DBL_MAX) continue; // neighbor already closed
+                
+                double direct_neighbor_cost = (i != 0 && j != 0) ? 1.414214 : 1.0; // if on diagonal cost is sqrt(2) otherwise 1
+                double g = g_score[cur] + direct_neighbor_cost;
+                if (g < g_score[neighbor]) {
+                    g_score[neighbor] = g;
+                    open[neighbor].f = g + euclidean_flat_dist(neighbor_x, neighbor_y, coarse_goal_pos[0], coarse_goal_pos[1]);
+                    open[neighbor].open = true;
+                    parent[neighbor] = cur;
+                }
             }
         }
-        
-        visited[cur] = true;
     }
     
     // no path to goal found
     next_coarse_pos[0] = coarse_start_pos[0];
     next_coarse_pos[1] = coarse_start_pos[1];
-    free(queue); 
-    free(visited);
+    free(open); 
+    free(g_score);
     free(parent);
 }
 
@@ -707,7 +748,6 @@ void SLAM_run() {
     double target_dist = 0;
 
     while (iterations < 100) {
-        if (slam_restart) break;
         prev = SLAM_iteration(prev, global_trans, &global_rot);
         ++iterations;
 
@@ -715,6 +755,11 @@ void SLAM_run() {
             double cur_map_pos[2] = {
                 -(global_trans[0] / MAP_RATIO) + MAP_SIZE / 2, -(global_trans[1] / MAP_RATIO) + MAP_SIZE / 2
             };
+            double goal_map_pos[2] = {
+                -(goal_pos[0] / MAP_RATIO) + MAP_SIZE / 2, -(goal_pos[1] / MAP_RATIO) + MAP_SIZE / 2
+            };
+
+            /*
             RRT_node * RRT_root = compute_RRT(cur_map_pos);
             draw_RRT_on_map(RRT_root);
 
@@ -725,12 +770,29 @@ void SLAM_run() {
             printf("root: %d,%d next: %d,%d\n", RRT_root->x, RRT_root->y, next_node->x, next_node->y);
             map_tree[(int)goal_pos[1]][(int)goal_pos[0]] = 253;     // draw goal on map
             map_tree[(int)next_node->y][(int)next_node->x] = 254;   // draw next node endpoint on map
+            */
+
+            // find next node in BFS on coarse_map
+            next_coarse_path_node(cur_map_pos, goal_map_pos, next_coarse_pos);
+            int map_cell_center_x = next_coarse_pos[0] * COARSE_RATIO + COARSE_RATIO / 2;
+            int map_cell_center_y = next_coarse_pos[1] * COARSE_RATIO + COARSE_RATIO / 2;
+            next_world_pos[0] = -(map_cell_center_x - MAP_SIZE / 2) * MAP_RATIO;
+            next_world_pos[1] = -(map_cell_center_y - MAP_SIZE / 2) * MAP_RATIO;
+            
+            memcpy(map_tree, map, sizeof(uint8_t) * MAP_SIZE * MAP_SIZE);
+            map_tree[(int)cur_map_pos[1]][(int)cur_map_pos[0]] = 253;   // draw start on map
+            map_tree[(int)goal_pos[1]][(int)goal_pos[0]] = 253;     // draw goal on map
+            map_tree[(int)map_cell_center_x][(int)map_cell_center_x] = 254;   // draw next node endpoint on map
+
 
             // to move towards next node endpoint, decide whether to rotate or move straight
-            double goal_x = next_world_pos[0], goal_y = next_world_pos[1], cur_x = global_trans[0], cur_y = global_trans[1];
-            double rot_needed = atan2((goal_y - cur_y), (goal_x - cur_x)) * 180.0 / M_PI;
+            double goal_x = next_world_pos[1], goal_y = next_world_pos[0], cur_x = global_trans[1], cur_y = global_trans[0];
+            double rot_needed = atan2(-(goal_y - cur_y), (goal_x - cur_x)) * 180.0 / M_PI; // atan(-y/x) because y is top to bottom on map
+            double rot_relative = rot_needed - global_rot;
+            while (rot_relative > 180.0) rot_relative -= 360.0;
+            while (rot_relative < -180.0) rot_relative += 360.0;
             double dist_needed = sqrt(pow((goal_x - cur_x), 2) + pow((goal_y - cur_y), 2));
-            if (fabs(rot_needed) > PLANNING_ROTATION_TOLERANCE) {
+            if (fabs(rot_relative) > PLANNING_ROTATION_TOLERANCE) {
                 target_rot = rot_needed;
                 state = ROTATING;
             } else {
@@ -738,15 +800,13 @@ void SLAM_run() {
                 state = MOVING;
             }
 
-            printf("COMPUTING: rot_needed: %f dist_needed: %f\n", rot_needed, dist_needed);
-            free_RRT(RRT_root);
+            //free_RRT(RRT_root);
         } 
         
         if (state == ROTATING) {
             double rot_needed = target_rot - global_rot;
-            //while (rot_needed > 180.0) rot_needed -= 360.0;
-            //while (rot_needed < -180.0) rot_needed += 360.0;
-            printf("ROTATING: rot_needed: %f\n", rot_needed);
+            while (rot_needed > 180.0) rot_needed -= 360.0;
+            while (rot_needed < -180.0) rot_needed += 360.0;
             if (fabs(rot_needed) > PLANNING_ROTATION_TOLERANCE) {
                 motor_rotate(rot_needed);
             } else {
@@ -754,7 +814,6 @@ void SLAM_run() {
             }
         } 
         if (state == MOVING) {
-            printf("MOVING: target_dist: %f\n", target_dist);
             motor_straight(target_dist);
             state = PLANNING;
         }
@@ -1075,8 +1134,8 @@ void app_main(void)
             printf("restarting slam\n");
             iterations = 0;
             memset(map, 0, sizeof(map));
-            //SLAM_run();
-            manual_control();
+            SLAM_run();
+            //manual_control();
         }
         vTaskDelay(pdMS_TO_TICKS(100));
     };

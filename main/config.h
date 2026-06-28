@@ -28,7 +28,7 @@ static const char* TAG = "CarModule";
 #define MAX_DISTANCE_PER_ITERATION 100 // maximum distance a corresponding point can be apart from its pair
 #define MAXIMUM_UNCERTAINTY_INVERVAL 0.1 // golden section minimization will stop once angle uncertainty is within 0.1 degrees
 #define MAXIMUM_RRT_ITERATIONS 500 // maximum number of nodes RRT will try to create
-#define COARSE_RATIO 10 // downscaling factor for coarse occupancy grid
+#define COARSE_RATIO 5 // each coarse occupancy grid cell represents this many normal map cells squared
 #define PLANNING_ROTATION_TOLERANCE 15.0 // if rotation at least this similar to edge then drive straight
 #define MAX_ROT_PER_STEP 20.0 // rotate maximum of this number of degrees for each SLAM step
 #define MAX_DIST_PER_STEP 20.0 // maximum distance robot can move for each SLAM step
