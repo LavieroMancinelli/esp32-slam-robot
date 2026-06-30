@@ -40,6 +40,7 @@ void draw_RRT_on_map(RRT_node *);
 RRT_node * compute_RRT(double *);
 void free_RRT(RRT_node *);
 RRT_node * find_nearest_RRT_node(RRT_node *, int, int);
+void fill_coarse_map();
 
 
 RRT_node * RRT_traversal_queue[MAXIMUM_RRT_ITERATIONS] = {NULL};
@@ -748,16 +749,14 @@ void SLAM_run() {
     double target_dist = 0;
 
     while (iterations < 100) {
+        if (slam_restart) break;
         prev = SLAM_iteration(prev, global_trans, &global_rot);
         ++iterations;
 
+        //fill_coarse_map();
         if (state == PLANNING) {
-            double cur_map_pos[2] = {
-                -(global_trans[0] / MAP_RATIO) + MAP_SIZE / 2, -(global_trans[1] / MAP_RATIO) + MAP_SIZE / 2
-            };
-            double goal_map_pos[2] = {
-                -(goal_pos[0] / MAP_RATIO) + MAP_SIZE / 2, -(goal_pos[1] / MAP_RATIO) + MAP_SIZE / 2
-            };
+            double cur_map_pos[2] = {-(global_trans[0] / MAP_RATIO) + MAP_SIZE / 2, -(global_trans[1] / MAP_RATIO) + MAP_SIZE / 2};
+            double goal_map_pos[2] = {-(goal_pos[0] / MAP_RATIO) + MAP_SIZE / 2, -(goal_pos[1] / MAP_RATIO) + MAP_SIZE / 2};
 
             /*
             RRT_node * RRT_root = compute_RRT(cur_map_pos);
@@ -782,21 +781,22 @@ void SLAM_run() {
             memcpy(map_tree, map, sizeof(uint8_t) * MAP_SIZE * MAP_SIZE);
             map_tree[(int)cur_map_pos[1]][(int)cur_map_pos[0]] = 253;   // draw start on map
             map_tree[(int)goal_pos[1]][(int)goal_pos[0]] = 253;     // draw goal on map
-            map_tree[(int)map_cell_center_x][(int)map_cell_center_x] = 254;   // draw next node endpoint on map
+            map_tree[(int)map_cell_center_x][-(int)map_cell_center_y] = 254;   // draw next node endpoint on map
 
 
             // to move towards next node endpoint, decide whether to rotate or move straight
-            double goal_x = next_world_pos[1], goal_y = next_world_pos[0], cur_x = global_trans[1], cur_y = global_trans[0];
-            double rot_needed = atan2(-(goal_y - cur_y), (goal_x - cur_x)) * 180.0 / M_PI; // atan(-y/x) because y is top to bottom on map
+            double goal_x = next_world_pos[0], goal_y = next_world_pos[1], cur_x = global_trans[1], cur_y = global_trans[0];
+            double rot_needed = atan2((goal_y - cur_y), (goal_x - cur_x)) * 180.0 / M_PI;
             double rot_relative = rot_needed - global_rot;
             while (rot_relative > 180.0) rot_relative -= 360.0;
             while (rot_relative < -180.0) rot_relative += 360.0;
-            double dist_needed = sqrt(pow((goal_x - cur_x), 2) + pow((goal_y - cur_y), 2));
+            target_dist = sqrt(pow((goal_x - cur_x), 2) + pow((goal_y - cur_y), 2));
+            printf("goal: [%f,%f] cur: [%f,%f]\n", goal_x, goal_y, cur_x, cur_y);
+            printf("dist needed: %f for rotation: %f\n", target_dist, rot_relative);
             if (fabs(rot_relative) > PLANNING_ROTATION_TOLERANCE) {
                 target_rot = rot_needed;
                 state = ROTATING;
             } else {
-                target_dist = dist_needed;
                 state = MOVING;
             }
 
