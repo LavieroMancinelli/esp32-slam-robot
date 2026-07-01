@@ -1,6 +1,7 @@
 #include "wifi.h"
 
 extern volatile bool slam_restart;
+extern volatile bool slam_end;
 extern volatile bool manual_left;
 extern volatile bool manual_forward;
 extern volatile bool manual_right;
@@ -60,6 +61,7 @@ static esp_err_t index_handler(httpd_req_t *req) {
         "<body style='background:gray'>"
         "   <canvas id='map' width='250' height='250' style='border:2px solid red; width: 1000px; height: 1000px; image-rendering: pixelated; margin: auto;'></canvas>"
         "   <button onclick='restartSlam()'>Restart</button>"
+        "   <button onclick='endSlam()'>End</button>"
         "   <div>MANUAL CONTROLS:</div>"
         "   <button onclick='manualLeft()'>Turn Left</button>"
         "   <button onclick='manualForward()'>Go Forward</button>"
@@ -78,9 +80,11 @@ static esp_err_t index_handler(httpd_req_t *req) {
         "           else if (data[i] == 2) values = [0, 0, 255, 255];"
         "           else if (data[i] == 3) values = [255, 0, 255, 255];"
         "           else if (data[i] == 4) values = [0, 255, 0, 255];"
-        "           else if (data[i] == 253) values = [255, 150, 0, 255];"
-        "           else if (data[i] == 254) values = [0, 255, 255, 255];"
-        "           else if (data[i] == 255) values = [150, 150, 150, 255];"
+        "           else if (data[i] == 251) values = [120, 50, 255, 255];"     // A* path
+        "           else if (data[i] == 252) values = [240, 240, 240, 255];"    // coarse gridline
+        "           else if (data[i] == 253) values = [255, 150, 0, 255];"      // start/goal
+        "           else if (data[i] == 254) values = [0, 255, 255, 255];"      // next node
+        "           else if (data[i] == 255) values = [150, 150, 150, 255];"    // RRT edge
         "           else if (data[i] != 0) values = [0, 0, 0, 255];"
         "           return values;"
         "       }"
@@ -94,6 +98,7 @@ static esp_err_t index_handler(httpd_req_t *req) {
         "       ctx.putImageData(imageData, 0, 0);"
         "   }"
         "   async function restartSlam() { await fetch('/restart'); }"
+        "   async function endSlam() { await fetch('/end'); }"
         "   async function manualLeft() { await fetch('/left'); }"
         "   async function manualForward() { await fetch('/forward'); }"
         "   async function manualRight() { await fetch('/right'); }"
@@ -137,6 +142,20 @@ static const httpd_uri_t restart_slam_uri = {
     .uri        = "/restart",
     .method     = HTTP_GET,
     .handler    = restart_slam_handler,
+    .user_ctx   = NULL
+};
+
+static esp_err_t end_slam_handler(httpd_req_t *req) {
+    httpd_resp_sendstr(req, "ok");
+    printf("SIGNAL: END\n");
+    slam_end = true;
+    return ESP_OK;
+};
+
+static const httpd_uri_t end_slam_uri = {
+    .uri        = "/end",
+    .method     = HTTP_GET,
+    .handler    = end_slam_handler,
     .user_ctx   = NULL
 };
 
@@ -193,11 +212,13 @@ void handle_server_init() {
         esp_err_t r4 = httpd_register_uri_handler(server, &manual_left_uri);
         esp_err_t r5 = httpd_register_uri_handler(server, &manual_forward_uri);
         esp_err_t r6 = httpd_register_uri_handler(server, &manual_right_uri);
+        esp_err_t r7 = httpd_register_uri_handler(server, &end_slam_uri);
         printf("index handler registered: %d\n", r1);
         printf("map handler registered: %d\n", r2);
         printf("restart handler registered: %d\n", r3);
         printf("manual left handler registered: %d\n", r4);
         printf("manual forward handler registered: %d\n", r5);
-        printf("manual rightt handler registered: %d\n", r6);
+        printf("manual right handler registered: %d\n", r6);
+        printf("end handler registered: %d\n", r7);
     }
 }

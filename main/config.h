@@ -20,7 +20,7 @@ static const char* TAG = "CarModule";
 #define DISTANCE_SIMILARITY_THRESHOLD 25 // landmarks must be within 10mm of their pair
 #define MIN_SENSOR_INTERVAL 0 // minimum ms between sensor readings
 #define MAP_SIZE 250 // 500x500 cm^2 map
-#define MAP_RATIO 15 // cell represents 5 mm^2
+#define MAP_RATIO 15 // cell represents this number mm^2
 #define MOVE_TIME_PER_STEP 500 // 100 ms of wheel spinning inbetween slam steps
 #define MOVE_SPEED 25 // wheel turns at 25% power
 #define POINT_NEIGHBORHOOD_SIZE 3 // number of relevant points on each side of current point to calculate tangent line

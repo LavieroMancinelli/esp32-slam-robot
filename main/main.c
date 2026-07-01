@@ -22,7 +22,7 @@ bool coarse_map[MAP_SIZE / COARSE_RATIO][MAP_SIZE / COARSE_RATIO] = {false};
 bool coarse_tree_map[MAP_SIZE / COARSE_RATIO][MAP_SIZE / COARSE_RATIO] = {false};
 int coarse_indices[(MAP_SIZE / COARSE_RATIO) * (MAP_SIZE / COARSE_RATIO)];
 
-volatile bool slam_restart = true, manual_left = false, manual_right = false, manual_forward = false;
+volatile bool slam_restart = true, manual_left = false, manual_right = false, manual_forward = false, slam_end = false;
 #define max_coarse_index_length ((MAP_SIZE / COARSE_RATIO) * (MAP_SIZE / COARSE_RATIO))
 int random_values[max_coarse_index_length];
     
@@ -600,7 +600,7 @@ void motor_rotate(double rot_needed) { // rotate rot_needed degrees
     printf("rot step %f degrees turned\n", rot_needed);
 }
 
-void motor_straight(double dist_needed) { // rotate rot_needed degrees
+void motor_straight(double dist_needed) { // move dist_needed mm bounded by MAX_DIST_PER_STEP
     dist_needed = dist_needed <= MAX_DIST_PER_STEP ? dist_needed : MAX_DIST_PER_STEP;
 
     changeSpeedA(0, MOVE_SPEED);
@@ -677,16 +677,21 @@ void next_coarse_path_node(double start_pos[], double goal_pos[], int next_coars
     open[coarse_start].open = true;
     g_score[coarse_start] = 0.0;
 
-
     while (true) {
         int cur = find_min_f(open, total_coarse_cells);
         if (!open[cur].open) break; // no open nodes left
         open[cur].open = false;
         if (cur == coarse_goal) { // found goal
             int next = cur;
-            while (parent[cur] != -1) { // trace path to parent
+            while (parent[cur] != -1) {//while (parent[cur] != -1 && parent[parent[cur]] != -1) { // trace path to 2nd after start
                 next = cur;
                 cur = parent[cur];
+
+                // draw each node in path on map
+                int node_center_x = (next % coarse_map_width) * COARSE_RATIO + COARSE_RATIO / 2;
+                int node_center_y = (next / coarse_map_width) * COARSE_RATIO + COARSE_RATIO / 2;
+                printf("HELLOOOO %d,%d\n", node_center_x, -node_center_y);
+                map_tree[node_center_x][-node_center_y] = 251;
             }
             next_coarse_pos[0] = next % coarse_map_width; // x
             next_coarse_pos[1] = next / coarse_map_width; // y
@@ -720,6 +725,7 @@ void next_coarse_path_node(double start_pos[], double goal_pos[], int next_coars
     }
     
     // no path to goal found
+    printf("surely not here\n");
     next_coarse_pos[0] = coarse_start_pos[0];
     next_coarse_pos[1] = coarse_start_pos[1];
     free(open); 
@@ -732,7 +738,7 @@ void SLAM_run() {
     RangeScanNode * prev = head;
     double global_trans[2] = {0};
     double global_rot = 0;
-    double goal_pos[2] = {125, 30}; // temporary hardcoded goal
+    double goal_pos[2] = {125, 60}; // temporary hardcoded goal
 
     // generate rand values to be reused to improve RRT generation consistency
     srand(10);
@@ -749,14 +755,15 @@ void SLAM_run() {
     double target_dist = 0;
 
     while (iterations < 100) {
-        if (slam_restart) break;
+        if (slam_restart || slam_end) break;
         prev = SLAM_iteration(prev, global_trans, &global_rot);
         ++iterations;
 
-        //fill_coarse_map();
+        fill_coarse_map();
         if (state == PLANNING) {
+            memcpy(map_tree, map, sizeof(uint8_t) * MAP_SIZE * MAP_SIZE);
             double cur_map_pos[2] = {-(global_trans[0] / MAP_RATIO) + MAP_SIZE / 2, -(global_trans[1] / MAP_RATIO) + MAP_SIZE / 2};
-            double goal_map_pos[2] = {-(goal_pos[0] / MAP_RATIO) + MAP_SIZE / 2, -(goal_pos[1] / MAP_RATIO) + MAP_SIZE / 2};
+            double goal_map_pos[2] = {goal_pos[1], goal_pos[0]};
 
             /*
             RRT_node * RRT_root = compute_RRT(cur_map_pos);
@@ -778,7 +785,6 @@ void SLAM_run() {
             next_world_pos[0] = -(map_cell_center_x - MAP_SIZE / 2) * MAP_RATIO;
             next_world_pos[1] = -(map_cell_center_y - MAP_SIZE / 2) * MAP_RATIO;
             
-            memcpy(map_tree, map, sizeof(uint8_t) * MAP_SIZE * MAP_SIZE);
             map_tree[(int)cur_map_pos[1]][(int)cur_map_pos[0]] = 253;   // draw start on map
             map_tree[(int)goal_pos[1]][(int)goal_pos[0]] = 253;     // draw goal on map
             map_tree[(int)map_cell_center_x][-(int)map_cell_center_y] = 254;   // draw next node endpoint on map
@@ -871,7 +877,7 @@ RRT_node * find_nearest_RRT_node(RRT_node * root, int a_x, int a_y) {
 void fill_coarse_map() {
     for (size_t i = 0; i < MAP_SIZE; ++i) {
         for (size_t j = 0; j < MAP_SIZE; ++j) {
-            if (map[i][j] != 0)
+            if (map[i][j] != 0 && map[i][j] != 252)
                 coarse_map[i/COARSE_RATIO][j/COARSE_RATIO] = true;
         }
     }
@@ -1040,6 +1046,15 @@ void manual_control() {
     }
 }
 
+void draw_coarse_gridlines() {
+    const int coarse_map_width = (MAP_SIZE / COARSE_RATIO);
+    for (int i = 0; i < MAP_SIZE; ++i) {
+        for (int j = 0; j < MAP_SIZE; ++j) {
+            if (i % COARSE_RATIO == 0 || j % COARSE_RATIO == 0) map[i][j] = 252;
+        }
+    }
+}
+
 void app_main(void) 
 {
     gpio_config_t io_config = {
@@ -1131,9 +1146,11 @@ void app_main(void)
     while (1) {
         if (slam_restart) {
             slam_restart = false;
+            slam_end = false;
             printf("restarting slam\n");
             iterations = 0;
             memset(map, 0, sizeof(map));
+            draw_coarse_gridlines();
             SLAM_run();
             //manual_control();
         }
