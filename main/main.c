@@ -512,10 +512,10 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
         // use multi-hypothesis to find best angle to center golden section search around
         double best_tmd = DBL_MAX;
         double best_rot = 0.0;
-        int num_coarse = 9;  // try 9 angles: -40, -30, -20, -10, 0, 10, 20, 30, 40
+        int num_coarse = 5;  // try 13 angles: -30, -15, -0, 15, 30
         double delta_Tx_tmp = 0, delta_Ty_tmp = 0;
         for (int s = 0; s < num_coarse; ++s) {
-            double test_rot = -40.0 + s * (80.0 / (num_coarse - 1));
+            double test_rot = -30.0 + s * (60.0 / (num_coarse - 1));
             memset(corresp_points_x_y, 0, SENSOR_FREQ * sizeof(double) * 2);
             memset(combined_x_y_and_pair_dists, 0, SENSOR_FREQ * sizeof(double) * 3);
             num_pairs = 0; num_outliers = 0;
@@ -528,7 +528,7 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
         }
 
         // golden section search to find ω that minimizes total_matching_distance
-        double refine_range = 10.0;  // search +-10 degrees around best coarse angle
+        double refine_range = 7.5;  // search +-10 degrees around best coarse angle
         double optimal_rot = 0.0;
         gs_search_for_angle(best_rot - refine_range, best_rot + refine_range, &optimal_rot, local_points_x_y, prev->points_x_y, corresp_points_x_y, combined_x_y_and_pair_dists);
 
@@ -540,21 +540,27 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
         compute_correspondence_pairs(local_points_x_y, SENSOR_FREQ, prev->points_x_y, corresp_points_x_y, optimal_rot, &num_pairs, &num_outliers, combined_x_y_and_pair_dists);
         double sum_corresp_x = 0, sum_corresp_y = 0;
         double sum_rot_x = 0, sum_rot_y = 0;
-        int count = 0;
+        double total_weight = 0;
+        //int count = 0;
         for (size_t i = 0; i < SENSOR_FREQ; ++i) {
             if (local_points_x_y[2*i] == 0.0 || local_points_x_y[2*i+1] == 0.0 || corresp_points_x_y[2*i] == 0.0 || corresp_points_x_y[2*i+1] == 0.0)
                 continue;
+            double scan_angle = ((double)i / (SENSOR_FREQ - 1) * 180.0 - 90.0) * M_PI / 180.0;
+            double weight = pow(cos(scan_angle * M_PI/180), 40); // 1.0 at center, 0 at edges
+            if (weight <= 0.0) continue;
+
             double rot_x = cos(optimal_rot * M_PI/180) * local_points_x_y[2*i] - sin(optimal_rot * M_PI/180) * local_points_x_y[2*i+1];
             double rot_y = sin(optimal_rot * M_PI/180) * local_points_x_y[2*i] + cos(optimal_rot * M_PI/180) * local_points_x_y[2*i+1];
-            sum_corresp_x += corresp_points_x_y[2*i];
-            sum_corresp_y += corresp_points_x_y[2*i+1];
-            sum_rot_x += rot_x;
-            sum_rot_y += rot_y;
-            ++count;
+            sum_corresp_x += weight * corresp_points_x_y[2*i];
+            sum_corresp_y += weight * corresp_points_x_y[2*i+1];
+            sum_rot_x += weight * rot_x;
+            sum_rot_y += weight * rot_y;
+            total_weight += weight;
+            //++count;
         }
-        if (count > 0) {
-            final_Tx = (sum_corresp_x - sum_rot_x) / count;
-            final_Ty = (sum_corresp_y - sum_rot_y) / count;
+        if (total_weight > 0) { // if (count > 0)
+            final_Tx = (sum_corresp_x - sum_rot_x) / total_weight;
+            final_Ty = (sum_corresp_y - sum_rot_y) / total_weight;
         }
 
         // update the global trans and rot variables with found ω and T
@@ -568,6 +574,7 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
     // transform points to global space according to the new parameters
     transform_points(points, points_x_y, SENSOR_FREQ, g_trans, *g_rot);
     fill_map_from_points_x_y(points_x_y, SENSOR_FREQ);
+    fill_coarse_map();
     
     RangeScanNode* new_node = create_range_scan_node();
     memcpy(new_node->points_x_y, local_points_x_y, SENSOR_FREQ * sizeof(double) * 2); // save points in local space in new node
@@ -605,7 +612,7 @@ void motor_straight(double dist_needed) { // move dist_needed mm bounded by MAX_
 
     changeSpeedA(0, MOVE_SPEED);
     changeSpeedB(0, MOVE_SPEED);
-    vTaskDelay(pdMS_TO_TICKS(500.0 * fabs(dist_needed) / 13.0)); // temporary hardcoded estimate formula
+    vTaskDelay(pdMS_TO_TICKS(500.0 * fabs(dist_needed) * (MAP_RATIO / 5.0) / 13.0)); // temporary hardcoded estimate formula
     changeSpeedA(0, 0);
     changeSpeedB(0, 0);
     
@@ -683,14 +690,13 @@ void next_coarse_path_node(double start_pos[], double goal_pos[], int next_coars
         open[cur].open = false;
         if (cur == coarse_goal) { // found goal
             int next = cur;
-            while (parent[cur] != -1) {//while (parent[cur] != -1 && parent[parent[cur]] != -1) { // trace path to 2nd after start
+            while (parent[cur] != -1 && parent[parent[cur]] != -1) { // trace path to 2nd after start
                 next = cur;
                 cur = parent[cur];
 
                 // draw each node in path on map
                 int node_center_x = (next % coarse_map_width) * COARSE_RATIO + COARSE_RATIO / 2;
                 int node_center_y = (next / coarse_map_width) * COARSE_RATIO + COARSE_RATIO / 2;
-                printf("HELLOOOO %d,%d\n", node_center_x, -node_center_y);
                 map_tree[node_center_x][-node_center_y] = 251;
             }
             next_coarse_pos[0] = next % coarse_map_width; // x
@@ -707,8 +713,9 @@ void next_coarse_path_node(double start_pos[], double goal_pos[], int next_coars
             for (int j = -1; j <= 1; ++j) {
                 if (i == 0 && j == 0) continue; // skip self
                 int neighbor_y = cur_y + i, neighbor_x = cur_x + j;
-                if (neighbor_y < 0 || neighbor_x < 0 || neighbor_y >= coarse_map_width || neighbor_x >= coarse_map_width
-                    || coarse_map[neighbor_y][neighbor_x]) continue; // skip if neighbor OOB or obstacle
+                if (neighbor_y < 0 || neighbor_x < 0 || neighbor_y >= coarse_map_width || neighbor_x >= coarse_map_width || coarse_map[neighbor_y][neighbor_x]) 
+                    continue; // skip if neighbor (or polar neighbor to it) OOB or obstacle
+                // || coarse_map[neighbor_y-1][neighbor_x] || coarse_map[neighbor_y+1][neighbor_x] || coarse_map[neighbor_y][neighbor_x-1] || coarse_map[neighbor_y][neighbor_x+1]
                 int neighbor = neighbor_y * coarse_map_width + neighbor_x;
                 if (!open[neighbor].open && open[neighbor].f != DBL_MAX) continue; // neighbor already closed
                 
@@ -725,7 +732,6 @@ void next_coarse_path_node(double start_pos[], double goal_pos[], int next_coars
     }
     
     // no path to goal found
-    printf("surely not here\n");
     next_coarse_pos[0] = coarse_start_pos[0];
     next_coarse_pos[1] = coarse_start_pos[1];
     free(open); 
@@ -759,7 +765,6 @@ void SLAM_run() {
         prev = SLAM_iteration(prev, global_trans, &global_rot);
         ++iterations;
 
-        fill_coarse_map();
         if (state == PLANNING) {
             memcpy(map_tree, map, sizeof(uint8_t) * MAP_SIZE * MAP_SIZE);
             double cur_map_pos[2] = {-(global_trans[0] / MAP_RATIO) + MAP_SIZE / 2, -(global_trans[1] / MAP_RATIO) + MAP_SIZE / 2};
@@ -796,7 +801,7 @@ void SLAM_run() {
             double rot_relative = rot_needed - global_rot;
             while (rot_relative > 180.0) rot_relative -= 360.0;
             while (rot_relative < -180.0) rot_relative += 360.0;
-            target_dist = sqrt(pow((goal_x - cur_x), 2) + pow((goal_y - cur_y), 2));
+            target_dist = sqrt(pow((goal_x - cur_x), 2) + pow((goal_y - cur_y), 2));//sqrt(pow((map_cell_center_x - cur_map_pos[1]), 2) + pow((map_cell_center_y - cur_map_pos[0]), 2));
             printf("goal: [%f,%f] cur: [%f,%f]\n", goal_x, goal_y, cur_x, cur_y);
             printf("dist needed: %f for rotation: %f\n", target_dist, rot_relative);
             if (fabs(rot_relative) > PLANNING_ROTATION_TOLERANCE) {
@@ -875,10 +880,30 @@ RRT_node * find_nearest_RRT_node(RRT_node * root, int a_x, int a_y) {
 
 
 void fill_coarse_map() {
+    memset(coarse_map, false, sizeof(coarse_map));
+
+    // fill coarse_map with obstacles 
     for (size_t i = 0; i < MAP_SIZE; ++i) {
         for (size_t j = 0; j < MAP_SIZE; ++j) {
             if (map[i][j] != 0 && map[i][j] != 252)
                 coarse_map[i/COARSE_RATIO][j/COARSE_RATIO] = true;
+        }
+    }
+
+    // inflate obstacle cells by 1
+    const int w = MAP_SIZE / COARSE_RATIO;
+    bool temp[w][w];
+    memcpy(temp, coarse_map, sizeof(temp));
+    for (int i = 0; i < w; ++i) {
+        for (int j = 0; j < w; ++j) {
+            if (temp[i][j]) {
+                for (int d_i= -1; d_i <= 1; ++d_i) {
+                    for (int d_j= -1; d_j <= 1; ++d_j) {
+                        if (i+d_i >= 0 && i+d_i < w && j+d_j >= 0 && j+d_j < w)
+                            coarse_map[i+d_i][j+d_j] = true;
+                    }
+                }
+            }
         }
     }
 }
@@ -1151,8 +1176,8 @@ void app_main(void)
             iterations = 0;
             memset(map, 0, sizeof(map));
             draw_coarse_gridlines();
-            SLAM_run();
-            //manual_control();
+            //SLAM_run();
+            manual_control();
         }
         vTaskDelay(pdMS_TO_TICKS(100));
     };
