@@ -31,5 +31,6 @@ static const char* TAG = "CarModule";
 #define COARSE_RATIO 5 // each coarse occupancy grid cell represents this many normal map cells squared
 #define PLANNING_ROTATION_TOLERANCE 5.0 // if rotation at least this similar to edge then drive straight
 #define MAX_ROT_PER_STEP 15.0 // rotate maximum of this number of degrees for each SLAM step
-#define MAX_DIST_PER_STEP 5.0 // maximum distance robot (in map units) can move for each SLAM step
+#define MAX_DIST_PER_STEP 20.0 // maximum distance robot (in mm) can move for each SLAM step
+#define DEADRECKON_WEIGHT 0.75 // weight of deadreckoning estimation vs icp in translation computation
 #endif

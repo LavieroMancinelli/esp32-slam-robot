@@ -21,6 +21,7 @@ uint8_t map_tree[MAP_SIZE][MAP_SIZE] = {0};
 bool coarse_map[MAP_SIZE / COARSE_RATIO][MAP_SIZE / COARSE_RATIO] = {false};
 bool coarse_tree_map[MAP_SIZE / COARSE_RATIO][MAP_SIZE / COARSE_RATIO] = {false};
 int coarse_indices[(MAP_SIZE / COARSE_RATIO) * (MAP_SIZE / COARSE_RATIO)];
+double prev_move = 0.0;
 
 volatile bool slam_restart = true, manual_left = false, manual_right = false, manual_forward = false, slam_end = false;
 #define max_coarse_index_length ((MAP_SIZE / COARSE_RATIO) * (MAP_SIZE / COARSE_RATIO))
@@ -541,12 +542,11 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
         double sum_corresp_x = 0, sum_corresp_y = 0;
         double sum_rot_x = 0, sum_rot_y = 0;
         double total_weight = 0;
-        //int count = 0;
         for (size_t i = 0; i < SENSOR_FREQ; ++i) {
             if (local_points_x_y[2*i] == 0.0 || local_points_x_y[2*i+1] == 0.0 || corresp_points_x_y[2*i] == 0.0 || corresp_points_x_y[2*i+1] == 0.0)
                 continue;
             double scan_angle = ((double)i / (SENSOR_FREQ - 1) * 180.0 - 90.0) * M_PI / 180.0;
-            double weight = pow(cos(scan_angle * M_PI/180), 40); // 1.0 at center, 0 at edges
+            double weight = pow(cos(scan_angle * M_PI/180), 40); // weight by angle: 1 at center, 0 at edges
             if (weight <= 0.0) continue;
 
             double rot_x = cos(optimal_rot * M_PI/180) * local_points_x_y[2*i] - sin(optimal_rot * M_PI/180) * local_points_x_y[2*i+1];
@@ -556,11 +556,18 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
             sum_rot_x += weight * rot_x;
             sum_rot_y += weight * rot_y;
             total_weight += weight;
-            //++count;
         }
-        if (total_weight > 0) { // if (count > 0)
-            final_Tx = (sum_corresp_x - sum_rot_x) / total_weight;
-            final_Ty = (sum_corresp_y - sum_rot_y) / total_weight;
+
+        if (total_weight > 0) {
+            double expected_Tx = prev_move * sin((*g_rot) * M_PI/180.0);
+            double expected_Ty = prev_move * cos((*g_rot) * M_PI/180.0);
+            double icp_Tx = (sum_corresp_x - sum_rot_x) / total_weight;
+            double icp_Ty = (sum_corresp_y - sum_rot_y) / total_weight;
+            final_Tx = (DEADRECKON_WEIGHT * expected_Tx) + ((1.0-DEADRECKON_WEIGHT) * icp_Tx);
+            final_Ty = (DEADRECKON_WEIGHT * expected_Ty) + ((1.0-DEADRECKON_WEIGHT) * icp_Ty);
+            
+            printf("total weight %f\t icp_Tx %f\t icp_Ty %f\t expected_Tx %f\t expected_Ty %f\n", total_weight, icp_Tx, icp_Ty, expected_Tx, expected_Ty);
+            
         }
 
         // update the global trans and rot variables with found ω and T
@@ -581,7 +588,7 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
     new_node->prev = prev;
     prev->next = new_node;
     
-   
+    prev_move = 0.0;
     free(local_points_x_y);
     free(combined_x_y_and_pair_dists);
     free(corresp_points_x_y);
@@ -600,23 +607,20 @@ void motor_rotate(double rot_needed) { // rotate rot_needed degrees
         changeSpeedA(1, MOVE_SPEED);
         changeSpeedB(0, MOVE_SPEED);
     }
-    vTaskDelay(pdMS_TO_TICKS(500.0 * fabs(rot_needed) / 20.0)); // temporary hardcoded estimate formula
+    vTaskDelay(pdMS_TO_TICKS(25.0 * fabs(rot_needed)));
     changeSpeedA(0, 0);
     changeSpeedB(0, 0);
-    
-    printf("rot step %f degrees turned\n", rot_needed);
 }
 
 void motor_straight(double dist_needed) { // move dist_needed mm bounded by MAX_DIST_PER_STEP
     dist_needed = dist_needed <= MAX_DIST_PER_STEP ? dist_needed : MAX_DIST_PER_STEP;
+    prev_move = dist_needed; // for dead reckoning
 
     changeSpeedA(0, MOVE_SPEED);
     changeSpeedB(0, MOVE_SPEED);
-    vTaskDelay(pdMS_TO_TICKS(500.0 * fabs(dist_needed) * (MAP_RATIO / 5.0) / 13.0)); // temporary hardcoded estimate formula
+    vTaskDelay(pdMS_TO_TICKS(21.4 * dist_needed)); // coefficient based on MOVE_SPEED 25
     changeSpeedA(0, 0);
     changeSpeedB(0, 0);
-    
-    printf("dist step %f units moved\n", dist_needed);
 }
 
 RRT_node * next_RRT_node_in_path(RRT_node * root, double goal_pos[]) {
