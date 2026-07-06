@@ -268,8 +268,8 @@ void get_normal_from_tangent(double * normal_x, double * normal_y, double points
         int neighbor_i_1 = left_i-j;
         int neighbor_i_2 = right_i+j;
         if (neighbor_i_1 >= 0 && neighbor_i_2 < points_len) {
-            tangent_x += points_x_y[neighbor_i_2*2] - points_x_y[neighbor_i_1*2];
-            tangent_y += points_x_y[neighbor_i_2*2+1] - points_x_y[neighbor_i_1*2+1];
+            tangent_x += (points_x_y[neighbor_i_2*2] != 0 ? points_x_y[neighbor_i_2*2] : 0) - (points_x_y[neighbor_i_1*2] != 0 ? points_x_y[neighbor_i_1*2] : 0);
+            tangent_y += (points_x_y[neighbor_i_2*2+1] != 0 ? points_x_y[neighbor_i_2*2+1] : 0) - (points_x_y[neighbor_i_1*2+1] != 0 ? points_x_y[neighbor_i_1*2+1] : 0);
             ++count;
         }
     }
@@ -513,7 +513,7 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
         // use multi-hypothesis to find best angle to center golden section search around
         double best_tmd = DBL_MAX;
         double best_rot = 0.0;
-        int num_coarse = 5;  // try 13 angles: -30, -15, -0, 15, 30
+        int num_coarse = 5;  // try 11 angles: -30, -15, 0, 15, 30
         double delta_Tx_tmp = 0, delta_Ty_tmp = 0;
         for (int s = 0; s < num_coarse; ++s) {
             double test_rot = -30.0 + s * (60.0 / (num_coarse - 1));
@@ -529,7 +529,7 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
         }
 
         // golden section search to find ω that minimizes total_matching_distance
-        double refine_range = 7.5;  // search +-10 degrees around best coarse angle
+        double refine_range = 7.5;  // search +- these degrees around best coarse angle
         double optimal_rot = 0.0;
         gs_search_for_angle(best_rot - refine_range, best_rot + refine_range, &optimal_rot, local_points_x_y, prev->points_x_y, corresp_points_x_y, combined_x_y_and_pair_dists);
 
@@ -546,7 +546,7 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
             if (local_points_x_y[2*i] == 0.0 || local_points_x_y[2*i+1] == 0.0 || corresp_points_x_y[2*i] == 0.0 || corresp_points_x_y[2*i+1] == 0.0)
                 continue;
             double scan_angle = ((double)i / (SENSOR_FREQ - 1) * 180.0 - 90.0) * M_PI / 180.0;
-            double weight = pow(cos(scan_angle * M_PI/180), 40); // weight by angle: 1 at center, 0 at edges
+            double weight = pow(cos(scan_angle * M_PI/180), 16); // weight by angle: 1 at center, 0 at edges
             if (weight <= 0.0) continue;
 
             double rot_x = cos(optimal_rot * M_PI/180) * local_points_x_y[2*i] - sin(optimal_rot * M_PI/180) * local_points_x_y[2*i+1];
@@ -559,12 +559,17 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
         }
 
         if (total_weight > 0) {
-            double expected_Tx = prev_move * sin((*g_rot) * M_PI/180.0);
+            double expected_Tx = prev_move * -sin((*g_rot) * M_PI/180.0);
             double expected_Ty = prev_move * cos((*g_rot) * M_PI/180.0);
             double icp_Tx = (sum_corresp_x - sum_rot_x) / total_weight;
             double icp_Ty = (sum_corresp_y - sum_rot_y) / total_weight;
-            final_Tx = (DEADRECKON_WEIGHT * expected_Tx) + ((1.0-DEADRECKON_WEIGHT) * icp_Tx);
-            final_Ty = (DEADRECKON_WEIGHT * expected_Ty) + ((1.0-DEADRECKON_WEIGHT) * icp_Ty);
+            if (prev_move > 0.0) { // normal case
+                final_Tx = (DEADRECKON_WEIGHT * expected_Tx) + ((1.0-DEADRECKON_WEIGHT) * icp_Tx);
+                final_Ty = (DEADRECKON_WEIGHT * expected_Ty) + ((1.0-DEADRECKON_WEIGHT) * icp_Ty);
+            } else { // for rotation, use pure icp (deadreckoning doesnt account for sensor displacement from turning)
+                final_Tx = ICP_TURN_SCALAR * icp_Tx;
+                final_Ty = ICP_TURN_SCALAR * icp_Ty;
+            }
             
             printf("total weight %f\t icp_Tx %f\t icp_Ty %f\t expected_Tx %f\t expected_Ty %f\n", total_weight, icp_Tx, icp_Ty, expected_Tx, expected_Ty);
             

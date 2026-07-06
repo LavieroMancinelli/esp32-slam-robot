@@ -20,7 +20,7 @@ static const char* TAG = "CarModule";
 #define DISTANCE_SIMILARITY_THRESHOLD 25 // landmarks must be within 10mm of their pair
 #define MIN_SENSOR_INTERVAL 0 // minimum ms between sensor readings
 #define MAP_SIZE 250 // 500x500 cm^2 map
-#define MAP_RATIO 15 // cell represents this number mm^2
+#define MAP_RATIO 5 // cell represents this number mm^2
 #define MOVE_TIME_PER_STEP 500 // 100 ms of wheel spinning inbetween slam steps
 #define MOVE_SPEED 25 // wheel turns at 25% power
 #define POINT_NEIGHBORHOOD_SIZE 3 // number of relevant points on each side of current point to calculate tangent line
@@ -32,5 +32,6 @@ static const char* TAG = "CarModule";
 #define PLANNING_ROTATION_TOLERANCE 5.0 // if rotation at least this similar to edge then drive straight
 #define MAX_ROT_PER_STEP 15.0 // rotate maximum of this number of degrees for each SLAM step
 #define MAX_DIST_PER_STEP 20.0 // maximum distance robot (in mm) can move for each SLAM step
-#define DEADRECKON_WEIGHT 0.75 // weight of deadreckoning estimation vs icp in translation computation
+#define DEADRECKON_WEIGHT 0.90 // weight of deadreckoning estimation vs icp in final translation computation
+#define ICP_TURN_SCALAR 0.5 // scalar on ICP T values during pure rotation, < 1 to reduce parallel wall error
 #endif
