@@ -21,7 +21,7 @@ uint8_t map_tree[MAP_SIZE][MAP_SIZE] = {0};
 bool coarse_map[MAP_SIZE / COARSE_RATIO][MAP_SIZE / COARSE_RATIO] = {false};
 bool coarse_tree_map[MAP_SIZE / COARSE_RATIO][MAP_SIZE / COARSE_RATIO] = {false};
 int coarse_indices[(MAP_SIZE / COARSE_RATIO) * (MAP_SIZE / COARSE_RATIO)];
-double prev_move = 0.0;
+double prev_move = 0.0, prev_rot = 0.0;
 
 volatile bool slam_restart = true, manual_left = false, manual_right = false, manual_forward = false, slam_end = false;
 #define max_coarse_index_length ((MAP_SIZE / COARSE_RATIO) * (MAP_SIZE / COARSE_RATIO))
@@ -288,11 +288,11 @@ void get_normal_from_tangent(double * normal_x, double * normal_y, double points
 }
 
 // 2
-void compute_correspondence_pairs(double points_x_y[], size_t points_len, double old_points_x_y[], double corresp_points_x_y[], double g_angle, int * num_pairs, int * num_outliers, double combined_x_y_and_pair_dists[]) {
+void compute_correspondence_pairs(double points_x_y[], size_t points_len, double old_points_x_y[], double corresp_points_x_y[], double g_angle, double offset_x, double offset_y, int * num_pairs, int * num_outliers, double combined_x_y_and_pair_dists[]) {
     for (size_t i = 0; i < points_len; ++i) {
         if (points_x_y[2*i] == 0.0 && points_x_y[2*i+1] == 0.0) continue;
-        double x1 = points_x_y[2*i];
-        double y1 = points_x_y[2*i+1];
+        double x1 = points_x_y[2*i] + offset_x;
+        double y1 = points_x_y[2*i+1] + offset_y;
         double angle = atan2(points_x_y[2*i+1], points_x_y[2*i]) * 180/M_PI + g_angle;
 
         size_t old_i_less_than_angle = 0;
@@ -391,7 +391,7 @@ void compute_correspondence_pairs(double points_x_y[], size_t points_len, double
 }
 
 // 3
-double compute_total_matching_distance(double points_x_y[], double corresp_points_x_y[], size_t points_len, int num_pairs, int num_outliers, double combined_x_y_and_pair_dists[], double * found_Tx, double * found_Ty) {
+double compute_tmd_point_to_plane(double points_x_y[], double corresp_points_x_y[], size_t points_len, int num_pairs, int num_outliers, double combined_x_y_and_pair_dists[], double * found_Tx, double * found_Ty) {
     if (num_pairs + num_outliers == 0) return DBL_MAX; // safety against div by 0
 
     
@@ -422,6 +422,7 @@ double compute_total_matching_distance(double points_x_y[], double corresp_point
 
     // sum of squared residual for each pair (distance between points in the pair), 
     double sum_squared_residuals = 0.0;
+    int count = 0;
     for (size_t i = 0; i < points_len; ++i) {
         if (points_x_y[2*i] == 0.0 || points_x_y[2*i+1] == 0.0 || corresp_points_x_y[2*i] == 0.0 || corresp_points_x_y[2*i+1] == 0.0) {
             continue; // invalid point or corresp_point
@@ -431,13 +432,33 @@ double compute_total_matching_distance(double points_x_y[], double corresp_point
             double d = combined_x_y_and_pair_dists[i*3+2];
             double residual = combined_x*Tx + combined_y*Ty - d;
             sum_squared_residuals += pow(residual, 2);
+            ++count;
         }
     }
 
     *found_Tx = Tx;
     *found_Ty = Ty;
     // total matching distance: match(ω) = 1/(np + no)(min_T(E(ω,T)) + no*(H_d)^2)
-    return 1.0 / (num_pairs + num_outliers) * (sum_squared_residuals + num_outliers * pow(MAX_DISTANCE_PER_ITERATION, 2));
+    return 1.0 / (count + num_outliers) * (sum_squared_residuals + num_outliers * pow(MAX_DISTANCE_PER_ITERATION, 2));
+}
+
+double compute_tmd_point_to_point(double points_x_y[], double corresp_points_x_y[], size_t points_len, int num_pairs, int num_outliers) {
+    if (num_pairs + num_outliers == 0) return DBL_MAX; // safety against div by 0
+
+    double sum_squared_residuals = 0.0;
+    int count = 0;
+    for (size_t i = 0; i < points_len; ++i) { // TO DO: ADD COS WEIGHTING HERE, MAYBE PARALLEL PROBLEM IS CAUSING POOR MATCHES
+        if (points_x_y[2*i] == 0.0 || corresp_points_x_y[2*i] == 0.0) {
+            continue; // invalid point or corresp_point
+        } else {
+            double dx = corresp_points_x_y[2*i] - points_x_y[2*i];
+            double dy = corresp_points_x_y[2*i+1] - points_x_y[2*i+1];
+            sum_squared_residuals += pow(dx, 2) + pow(dy, 2);
+            ++count;
+        }
+    }
+
+    return 1.0 / (count + num_outliers) * (sum_squared_residuals + num_outliers * pow(MAX_DISTANCE_PER_ITERATION, 2));
 }
 
 typedef struct RangeScanNode {
@@ -454,7 +475,7 @@ RangeScanNode* create_range_scan_node() {
     return new_node;
 }
 
-double gs_search_for_angle(double gs_lower_bound, double gs_upper_bound, double * optimal_rot, double local_points_x_y[], double prev_points_x_y[], double corresp_points_x_y[], double combined_x_y_and_pair_dists[]) {
+double gs_search_for_angle(double gs_lower_bound, double gs_upper_bound, double * optimal_rot, double g_rot, double local_points_x_y[], double prev_points_x_y[], double corresp_points_x_y[], double combined_x_y_and_pair_dists[]) {
     double r = (sqrt(5.0) - 1.0) / 2.0;
     double delta_Tx_1 = 0.0, delta_Ty_1 = 0.0, delta_Tx_2 = 0.0, delta_Ty_2 = 0.0;
     int num_pairs = 0, num_outliers = 0;
@@ -467,8 +488,11 @@ double gs_search_for_angle(double gs_lower_bound, double gs_upper_bound, double 
         memset(corresp_points_x_y, 0, SENSOR_FREQ * sizeof(double) * 2);
         memset(combined_x_y_and_pair_dists, 0, SENSOR_FREQ * sizeof(double) * 3);
         num_pairs = 0; num_outliers = 0;
-        compute_correspondence_pairs(local_points_x_y, SENSOR_FREQ, prev_points_x_y, corresp_points_x_y, test_rot, &num_pairs, &num_outliers, combined_x_y_and_pair_dists);
-        double tmd_1 = compute_total_matching_distance(local_points_x_y, corresp_points_x_y, SENSOR_FREQ, num_pairs, num_outliers, combined_x_y_and_pair_dists, &delta_Tx_1, &delta_Ty_1);
+        double estim_x = (101.6 * sin(g_rot*M_PI/180.0)) + (101.6 + prev_move) * -sin((g_rot + test_rot)*M_PI/180.0);
+        double estim_y = (101.6 * -cos(g_rot*M_PI/180.0)) + (101.6 + prev_move) * cos((g_rot + test_rot)*M_PI/180.0);
+        compute_correspondence_pairs(local_points_x_y, SENSOR_FREQ, prev_points_x_y, corresp_points_x_y, test_rot, estim_x, estim_y, &num_pairs, &num_outliers, combined_x_y_and_pair_dists);
+        double tmd_1 = compute_tmd_point_to_point(local_points_x_y, corresp_points_x_y, SENSOR_FREQ, num_pairs, num_outliers);
+        //double tmd_1 = compute_total_matching_distance(local_points_x_y, corresp_points_x_y, SENSOR_FREQ, num_pairs, num_outliers, combined_x_y_and_pair_dists, &delta_Tx_1, &delta_Ty_1);
 
 
         test_rot = x2;
@@ -476,8 +500,12 @@ double gs_search_for_angle(double gs_lower_bound, double gs_upper_bound, double 
         memset(corresp_points_x_y, 0, SENSOR_FREQ * sizeof(double) * 2);
         memset(combined_x_y_and_pair_dists, 0, SENSOR_FREQ * sizeof(double) * 3);
         num_pairs = 0; num_outliers = 0;
-        compute_correspondence_pairs(local_points_x_y, SENSOR_FREQ, prev_points_x_y, corresp_points_x_y, test_rot, &num_pairs, &num_outliers, combined_x_y_and_pair_dists);
-        double tmd_2 = compute_total_matching_distance(local_points_x_y, corresp_points_x_y, SENSOR_FREQ, num_pairs, num_outliers, combined_x_y_and_pair_dists, &delta_Tx_2, &delta_Ty_2);
+        estim_x = (101.6 * sin(g_rot*M_PI/180.0)) + (101.6 + prev_move) * -sin((g_rot + test_rot)*M_PI/180.0);
+        estim_y = (101.6 * -cos(g_rot*M_PI/180.0)) + (101.6 + prev_move) * cos((g_rot + test_rot)*M_PI/180.0);
+        compute_correspondence_pairs(local_points_x_y, SENSOR_FREQ, prev_points_x_y, corresp_points_x_y, test_rot, estim_x, estim_y, &num_pairs, &num_outliers, combined_x_y_and_pair_dists);
+        
+        double tmd_2 = compute_tmd_point_to_point(local_points_x_y, corresp_points_x_y, SENSOR_FREQ, num_pairs, num_outliers);
+        //double tmd_2 = compute_total_matching_distance(local_points_x_y, corresp_points_x_y, SENSOR_FREQ, num_pairs, num_outliers, combined_x_y_and_pair_dists, &delta_Tx_2, &delta_Ty_2);
         
         
         if (tmd_1 < tmd_2) {
@@ -492,8 +520,11 @@ double gs_search_for_angle(double gs_lower_bound, double gs_upper_bound, double 
     memset(corresp_points_x_y, 0, SENSOR_FREQ * sizeof(double) * 2);
     memset(combined_x_y_and_pair_dists, 0, SENSOR_FREQ * sizeof(double) * 3);
     num_pairs = 0; num_outliers = 0;
-    compute_correspondence_pairs(local_points_x_y, SENSOR_FREQ, prev_points_x_y, corresp_points_x_y, *optimal_rot, &num_pairs, &num_outliers, combined_x_y_and_pair_dists);
-    return compute_total_matching_distance(local_points_x_y, corresp_points_x_y, SENSOR_FREQ, num_pairs, num_outliers, combined_x_y_and_pair_dists, &delta_Tx_2, &delta_Ty_2);
+    double estim_x = (101.6 * sin(g_rot*M_PI/180.0)) + (101.6 + prev_move) * -sin((g_rot + *optimal_rot)*M_PI/180.0);
+    double estim_y = (101.6 * -cos(g_rot*M_PI/180.0)) + (101.6 + prev_move) * cos((g_rot + *optimal_rot)*M_PI/180.0);
+    compute_correspondence_pairs(local_points_x_y, SENSOR_FREQ, prev_points_x_y, corresp_points_x_y, *optimal_rot, estim_x, estim_y, &num_pairs, &num_outliers, combined_x_y_and_pair_dists);
+    //return compute_total_matching_distance(local_points_x_y, corresp_points_x_y, SENSOR_FREQ, num_pairs, num_outliers, combined_x_y_and_pair_dists, &delta_Tx_2, &delta_Ty_2);
+    return compute_tmd_point_to_point(local_points_x_y, corresp_points_x_y, SENSOR_FREQ, num_pairs, num_outliers);;
 }
 
 RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * g_rot) {
@@ -503,7 +534,7 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
     double *corresp_points_x_y = malloc(SENSOR_FREQ * sizeof(double) * 2);
     double *combined_x_y_and_pair_dists = malloc(SENSOR_FREQ * sizeof(double) * 3);
     int num_pairs = 0, num_outliers = 0;
-    double gs_lower_bound = -30.0, gs_upper_bound = 30.0;
+    //double gs_lower_bound = -30.0, gs_upper_bound = 30.0;
 
     printf("iteration: %d\n", iterations);
     collect_range_scan(points, SENSOR_FREQ, SENSOR_PERIOD);    
@@ -513,15 +544,20 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
         // use multi-hypothesis to find best angle to center golden section search around
         double best_tmd = DBL_MAX;
         double best_rot = 0.0;
-        int num_coarse = 5;  // try 11 angles: -30, -15, 0, 15, 30
+        int num_coarse = 15;  // try this many angles between evenly spaced among prev_rot +- search_half_width
+        double search_half_width = 15.0;
         double delta_Tx_tmp = 0, delta_Ty_tmp = 0;
         for (int s = 0; s < num_coarse; ++s) {
-            double test_rot = -30.0 + s * (60.0 / (num_coarse - 1));
+            double test_rot = (prev_rot - search_half_width) + s * (2*search_half_width / (num_coarse - 1));
+            //double test_rot = -30.0 + s * (60.0 / (num_coarse - 1));
             memset(corresp_points_x_y, 0, SENSOR_FREQ * sizeof(double) * 2);
             memset(combined_x_y_and_pair_dists, 0, SENSOR_FREQ * sizeof(double) * 3);
             num_pairs = 0; num_outliers = 0;
-            compute_correspondence_pairs(local_points_x_y, SENSOR_FREQ, prev->points_x_y, corresp_points_x_y, test_rot, &num_pairs, &num_outliers, combined_x_y_and_pair_dists);
-            double tmd = compute_total_matching_distance(local_points_x_y, corresp_points_x_y, SENSOR_FREQ, num_pairs, num_outliers, combined_x_y_and_pair_dists, &delta_Tx_tmp, &delta_Ty_tmp);
+            double estim_x = (101.6 * sin((*g_rot)*M_PI/180.0)) + (101.6 + prev_move) * -sin(((*g_rot) + test_rot)*M_PI/180.0);
+            double estim_y = (101.6 * -cos((*g_rot)*M_PI/180.0)) + (101.6 + prev_move) * cos(((*g_rot) + test_rot)*M_PI/180.0);
+            compute_correspondence_pairs(local_points_x_y, SENSOR_FREQ, prev->points_x_y, corresp_points_x_y, test_rot, estim_x, estim_y, &num_pairs, &num_outliers, combined_x_y_and_pair_dists);
+            double tmd = compute_tmd_point_to_point(local_points_x_y, corresp_points_x_y, SENSOR_FREQ, num_pairs, num_outliers);
+            //double tmd = compute_total_matching_distance(local_points_x_y, corresp_points_x_y, SENSOR_FREQ, num_pairs, num_outliers, combined_x_y_and_pair_dists, &delta_Tx_tmp, &delta_Ty_tmp);
             if (tmd < best_tmd) {
                 best_tmd = tmd;
                 best_rot = test_rot;
@@ -529,16 +565,19 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
         }
 
         // golden section search to find ω that minimizes total_matching_distance
-        double refine_range = 7.5;  // search +- these degrees around best coarse angle
+        double refine_range = 4.0;  // search +- these degrees around best coarse angle
         double optimal_rot = 0.0;
-        gs_search_for_angle(best_rot - refine_range, best_rot + refine_range, &optimal_rot, local_points_x_y, prev->points_x_y, corresp_points_x_y, combined_x_y_and_pair_dists);
+        gs_search_for_angle(best_rot - refine_range, best_rot + refine_range, &optimal_rot, *g_rot, local_points_x_y, prev->points_x_y, corresp_points_x_y, combined_x_y_and_pair_dists);
+        optimal_rot = optimal_rot * 0.5 + prev_rot * 0.5;
 
         // compute T that minimizes error given found ω using point-to-point ICP: T = mean(P*) - mean(Rω * P1)
         double final_Tx = 0.0, final_Ty = 0.0;
         memset(corresp_points_x_y, 0, SENSOR_FREQ * sizeof(double) * 2);
         memset(combined_x_y_and_pair_dists, 0, SENSOR_FREQ * sizeof(double) * 3);
         num_pairs = 0; num_outliers = 0;
-        compute_correspondence_pairs(local_points_x_y, SENSOR_FREQ, prev->points_x_y, corresp_points_x_y, optimal_rot, &num_pairs, &num_outliers, combined_x_y_and_pair_dists);
+        double expected_Tx = (101.6 * sin((*g_rot)*M_PI/180.0)) + (101.6 + prev_move) * -sin(((*g_rot) + optimal_rot)*M_PI/180.0);
+        double expected_Ty = (101.6 * -cos((*g_rot)*M_PI/180.0)) + (101.6 + prev_move) * cos(((*g_rot) + optimal_rot)*M_PI/180.0);
+        compute_correspondence_pairs(local_points_x_y, SENSOR_FREQ, prev->points_x_y, corresp_points_x_y, optimal_rot, expected_Tx, expected_Ty, &num_pairs, &num_outliers, combined_x_y_and_pair_dists);
         double sum_corresp_x = 0, sum_corresp_y = 0;
         double sum_rot_x = 0, sum_rot_y = 0;
         double total_weight = 0;
@@ -546,7 +585,7 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
             if (local_points_x_y[2*i] == 0.0 || local_points_x_y[2*i+1] == 0.0 || corresp_points_x_y[2*i] == 0.0 || corresp_points_x_y[2*i+1] == 0.0)
                 continue;
             double scan_angle = ((double)i / (SENSOR_FREQ - 1) * 180.0 - 90.0) * M_PI / 180.0;
-            double weight = pow(cos(scan_angle * M_PI/180), 16); // weight by angle: 1 at center, 0 at edges
+            double weight = pow(cos(scan_angle * M_PI/180), 6); // weight by angle: 1 at center, 0 at edges
             if (weight <= 0.0) continue;
 
             double rot_x = cos(optimal_rot * M_PI/180) * local_points_x_y[2*i] - sin(optimal_rot * M_PI/180) * local_points_x_y[2*i+1];
@@ -559,10 +598,14 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
         }
 
         if (total_weight > 0) {
-            double expected_Tx = prev_move * -sin((*g_rot) * M_PI/180.0);
-            double expected_Ty = prev_move * cos((*g_rot) * M_PI/180.0);
+            //double expected_Tx = prev_move * -sin((*g_rot) * M_PI/180.0);
+            //double expected_Ty = prev_move * cos((*g_rot) * M_PI/180.0);
             double icp_Tx = (sum_corresp_x - sum_rot_x) / total_weight;
             double icp_Ty = (sum_corresp_y - sum_rot_y) / total_weight;
+            
+            final_Tx = (DEADRECKON_WEIGHT * expected_Tx) + ((1.0-DEADRECKON_WEIGHT) * icp_Tx);
+            final_Ty = (DEADRECKON_WEIGHT * expected_Ty) + ((1.0-DEADRECKON_WEIGHT) * icp_Ty);
+            /*
             if (prev_move > 0.0) { // normal case
                 final_Tx = (DEADRECKON_WEIGHT * expected_Tx) + ((1.0-DEADRECKON_WEIGHT) * icp_Tx);
                 final_Ty = (DEADRECKON_WEIGHT * expected_Ty) + ((1.0-DEADRECKON_WEIGHT) * icp_Ty);
@@ -570,6 +613,7 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
                 final_Tx = ICP_TURN_SCALAR * icp_Tx;
                 final_Ty = ICP_TURN_SCALAR * icp_Ty;
             }
+                */
             
             printf("total weight %f\t icp_Tx %f\t icp_Ty %f\t expected_Tx %f\t expected_Ty %f\n", total_weight, icp_Tx, icp_Ty, expected_Tx, expected_Ty);
             
@@ -594,6 +638,7 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
     prev->next = new_node;
     
     prev_move = 0.0;
+    prev_rot = 0.0;
     free(local_points_x_y);
     free(combined_x_y_and_pair_dists);
     free(corresp_points_x_y);
@@ -604,6 +649,7 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
 
 void motor_rotate(double rot_needed) { // rotate rot_needed degrees
     rot_needed = fabs(rot_needed) <= MAX_ROT_PER_STEP ? rot_needed : (rot_needed > 0 ? MAX_ROT_PER_STEP : -MAX_ROT_PER_STEP);
+    prev_rot = rot_needed; // dead reckoning (rotation)
 
     if (rot_needed < 0) {
         changeSpeedA(0, MOVE_SPEED);
@@ -889,7 +935,7 @@ RRT_node * find_nearest_RRT_node(RRT_node * root, int a_x, int a_y) {
 
 
 void fill_coarse_map() {
-    memset(coarse_map, false, sizeof(coarse_map));
+    memset(coarse_map, 0, sizeof(bool) * max_coarse_index_length);
 
     // fill coarse_map with obstacles 
     for (size_t i = 0; i < MAP_SIZE; ++i) {
@@ -899,6 +945,7 @@ void fill_coarse_map() {
         }
     }
 
+    /*
     // inflate obstacle cells by 1
     const int w = MAP_SIZE / COARSE_RATIO;
     bool temp[w][w];
@@ -915,6 +962,7 @@ void fill_coarse_map() {
             }
         }
     }
+    */
 }
 
 // 0 = check edge constraint on coarse_map, 1 = draw edge constraint on coarse_map, 2 = draw RRT on map
@@ -1076,6 +1124,8 @@ void manual_control() {
         }
         prev = SLAM_iteration(prev, global_trans, &global_rot);
         memcpy(map_tree, map, sizeof(uint8_t) * MAP_SIZE * MAP_SIZE);
+        double cur_map_pos[2] = {-(global_trans[0] / MAP_RATIO) + MAP_SIZE / 2, -(global_trans[1] / MAP_RATIO) + MAP_SIZE / 2};
+        map_tree[(int)cur_map_pos[1]][(int)cur_map_pos[0]] = 253;   // draw start on map
         ++iterations;
     }
 }
