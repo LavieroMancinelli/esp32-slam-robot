@@ -42,6 +42,7 @@ RRT_node * compute_RRT(double *);
 void free_RRT(RRT_node *);
 RRT_node * find_nearest_RRT_node(RRT_node *, int, int);
 void fill_coarse_map();
+void get_normal_from_tangent(double *, double *, double *, int, int, int);
 
 
 RRT_node * RRT_traversal_queue[MAXIMUM_RRT_ITERATIONS] = {NULL};
@@ -183,6 +184,9 @@ void collect_range_scan(uint16_t points[], int freq, int dur) {
     if (points[freq-2] == 0) points[freq-1] = 0;
     
     recenter_servo();
+
+
+    
 }
 
 void matrix_mult_3x3_and_3x1(double a[3][3], double b[3]) { // 3x3 matrices, a times b, output saved in b
@@ -287,8 +291,21 @@ void get_normal_from_tangent(double * normal_x, double * normal_y, double points
     *normal_y = -normalized_tangent_x; 
 }
 
+void get_point_normals(double points_x_y[], size_t points_len, double point_normals_x_y[]) {
+    for (size_t i = 0; i < points_len; ++i) {
+        if (points_x_y[2*i] == 0.0 && points_x_y[2*i+1] == 0.0) continue;
+        
+        double normal_x1, normal_y1;
+        int left_i = (i > 0) ? (int)i-1 : 0;
+        int right_i = (i < points_len-1) ? (int)i+1 : (int)points_len-1;
+        get_normal_from_tangent(&normal_x1, &normal_y1, points_x_y, points_len, left_i, right_i);
+        point_normals_x_y[2*i] = normal_x1;
+        point_normals_x_y[2*i+1] = normal_y1;
+    }
+}
+
 // 2
-void compute_correspondence_pairs(double points_x_y[], size_t points_len, double old_points_x_y[], double corresp_points_x_y[], double g_angle, double offset_x, double offset_y, int * num_pairs, int * num_outliers, double combined_x_y_and_pair_dists[]) {
+void compute_correspondence_pairs(double points_x_y[], size_t points_len, double old_points_x_y[], double point_normals_x_y[], double old_point_normals_x_y[], double corresp_points_x_y[], double g_angle, double offset_x, double offset_y, int * num_pairs, int * num_outliers, double combined_x_y_and_pair_dists[]) {
     for (size_t i = 0; i < points_len; ++i) {
         if (points_x_y[2*i] == 0.0 && points_x_y[2*i+1] == 0.0) continue;
         double x1 = points_x_y[2*i] + offset_x;
@@ -327,22 +344,25 @@ void compute_correspondence_pairs(double points_x_y[], size_t points_len, double
 
             // (Rωn1) · n* > cos α
             //     (Rωn1)
-            double normal_x1, normal_y1;
-            int left_i = (i > 0) ? (int)i-1 : 0;
-            int right_i = (i < points_len-1) ? (int)i+1 : (int)points_len-1;
-            get_normal_from_tangent(&normal_x1, &normal_y1, points_x_y, points_len, left_i, right_i);
+            //double normal_x1, normal_y1;
+            //int left_i = (i > 0) ? (int)i-1 : 0;
+            //int right_i = (i < points_len-1) ? (int)i+1 : (int)points_len-1;
+            //get_normal_from_tangent(&normal_x1, &normal_y1, points_x_y, points_len, left_i, right_i);
+            double normal_x1 = point_normals_x_y[2*i];
+            double normal_y1 = point_normals_x_y[2*i+1];
             double rot_normal_x1 = cos(g_angle * M_PI/180) * normal_x1 - sin(g_angle * M_PI/180) * normal_y1;
             double rot_normal_y1 = sin(g_angle * M_PI/180) * normal_x1 + cos(g_angle * M_PI/180) * normal_y1;
             
 
             //     n*
-            double n_left_x, n_left_y, n_right_x, n_right_y;
-            int old_less_left_i = (old_i_less_than_angle > 0) ? (int)old_i_less_than_angle-1 : 0;
-            int old_less_right_i = (old_i_less_than_angle < points_len-1) ? (int)old_i_less_than_angle+1 : (int)points_len-1;
-            int old_greater_left_i = (old_i_greater_than_angle > 0) ? (int)old_i_greater_than_angle-1 : 0;
-            int old_greater_right_i = (old_i_greater_than_angle < points_len-1) ? (int)old_i_greater_than_angle+1 : (int)points_len-1;
-            get_normal_from_tangent(&n_left_x, &n_left_y, old_points_x_y, points_len, old_less_left_i, old_less_right_i);
-            get_normal_from_tangent(&n_right_x, &n_right_y, old_points_x_y, points_len, old_greater_left_i, old_greater_right_i);
+            double n_left_x = old_point_normals_x_y[2*old_i_less_than_angle], n_left_y = old_point_normals_x_y[2*old_i_less_than_angle+1], 
+                   n_right_x = old_point_normals_x_y[2*old_i_greater_than_angle], n_right_y = old_point_normals_x_y[2*old_i_greater_than_angle+1];
+            //int old_less_left_i = (old_i_less_than_angle > 0) ? (int)old_i_less_than_angle-1 : 0;
+            //int old_less_right_i = (old_i_less_than_angle < points_len-1) ? (int)old_i_less_than_angle+1 : (int)points_len-1;
+            //int old_greater_left_i = (old_i_greater_than_angle > 0) ? (int)old_i_greater_than_angle-1 : 0;
+            //int old_greater_right_i = (old_i_greater_than_angle < points_len-1) ? (int)old_i_greater_than_angle+1 : (int)points_len-1;
+            //get_normal_from_tangent(&n_left_x, &n_left_y, old_points_x_y, points_len, old_less_left_i, old_less_right_i);
+            //get_normal_from_tangent(&n_right_x, &n_right_y, old_points_x_y, points_len, old_greater_left_i, old_greater_right_i);
             double normal_corresp_x = n_left_x + t * (n_right_x - n_left_x);
             double normal_corresp_y = n_left_y + t * (n_right_y - n_left_y);
             double normal_corresp_mag = sqrt(pow(normal_corresp_x, 2) + pow(normal_corresp_y, 2));
@@ -442,23 +462,40 @@ double compute_tmd_point_to_plane(double points_x_y[], double corresp_points_x_y
     return 1.0 / (count + num_outliers) * (sum_squared_residuals + num_outliers * pow(MAX_DISTANCE_PER_ITERATION, 2));
 }
 
-double compute_tmd_point_to_point(double points_x_y[], double corresp_points_x_y[], size_t points_len, int num_pairs, int num_outliers) {
+double compute_tmd_point_to_point(double points_x_y[], double corresp_points_x_y[], double points_normals_x_y[], size_t points_len, int num_pairs, int num_outliers) {
     if (num_pairs + num_outliers == 0) return DBL_MAX; // safety against div by 0
 
     double sum_squared_residuals = 0.0;
-    int count = 0;
+    //int count = 0;
+    double total_weight = 0.0;
     for (size_t i = 0; i < points_len; ++i) { // TO DO: ADD COS WEIGHTING HERE, MAYBE PARALLEL PROBLEM IS CAUSING POOR MATCHES
-        if (points_x_y[2*i] == 0.0 || corresp_points_x_y[2*i] == 0.0) {
-            continue; // invalid point or corresp_point
-        } else {
-            double dx = corresp_points_x_y[2*i] - points_x_y[2*i];
-            double dy = corresp_points_x_y[2*i+1] - points_x_y[2*i+1];
-            sum_squared_residuals += pow(dx, 2) + pow(dy, 2);
-            ++count;
-        }
+        if (points_x_y[2*i] == 0.0 || corresp_points_x_y[2*i] == 0.0) continue; // invalid point or corresp_point
+        
+        double dx = corresp_points_x_y[2*i] - points_x_y[2*i];
+        double dy = corresp_points_x_y[2*i+1] - points_x_y[2*i+1];
+        //sum_squared_residuals += pow(dx, 2) + pow(dy, 2);
+        //++count;
+
+        
+        // weight by incident angle to direction of car
+        double forward_x = 0.0, forward_y = 1.0;
+        double forward_alignment = fabs(dx * forward_x + dy * forward_y);
+
+        // weight by incident angle to sensor ray
+        double ray_x = points_x_y[2*i], ray_y = points_x_y[2*i+1];
+        double ray_mag = sqrt(ray_x*ray_x + ray_y*ray_y);
+        ray_x /= ray_mag;
+        ray_y /= ray_mag;
+        double ray_alignment = fabs(points_normals_x_y[2*i] * ray_x + points_normals_x_y[2*i+1] * ray_y);
+        double weight = 0.5 + 0.5*pow(ray_alignment, 20) + 1.0*pow(forward_alignment, 1);
+        //double weight = pow(cos(scan_angle * M_PI/180), 6); // weight by angle: 1 at center, 0 at edges
+        if (weight <= 0.0) continue;
+        
+        total_weight += weight;
+        sum_squared_residuals += weight * pow(dx, 2) + weight * pow(dy, 2);
     }
 
-    return 1.0 / (count + num_outliers) * (sum_squared_residuals + num_outliers * pow(MAX_DISTANCE_PER_ITERATION, 2));
+    return 1.0 / (total_weight + num_outliers) * (sum_squared_residuals + num_outliers * pow(MAX_DISTANCE_PER_ITERATION, 2));
 }
 
 typedef struct RangeScanNode {
@@ -475,7 +512,7 @@ RangeScanNode* create_range_scan_node() {
     return new_node;
 }
 
-double gs_search_for_angle(double gs_lower_bound, double gs_upper_bound, double * optimal_rot, double g_rot, double local_points_x_y[], double prev_points_x_y[], double corresp_points_x_y[], double combined_x_y_and_pair_dists[]) {
+double gs_search_for_angle(double gs_lower_bound, double gs_upper_bound, double * optimal_rot, double g_rot, double local_points_x_y[], double prev_points_x_y[], double points_normals_x_y[], double old_points_normals_x_y[], double corresp_points_x_y[], double combined_x_y_and_pair_dists[]) {
     double r = (sqrt(5.0) - 1.0) / 2.0;
     double delta_Tx_1 = 0.0, delta_Ty_1 = 0.0, delta_Tx_2 = 0.0, delta_Ty_2 = 0.0;
     int num_pairs = 0, num_outliers = 0;
@@ -490,8 +527,8 @@ double gs_search_for_angle(double gs_lower_bound, double gs_upper_bound, double 
         num_pairs = 0; num_outliers = 0;
         double estim_x = (101.6 * sin(g_rot*M_PI/180.0)) + (101.6 + prev_move) * -sin((g_rot + test_rot)*M_PI/180.0);
         double estim_y = (101.6 * -cos(g_rot*M_PI/180.0)) + (101.6 + prev_move) * cos((g_rot + test_rot)*M_PI/180.0);
-        compute_correspondence_pairs(local_points_x_y, SENSOR_FREQ, prev_points_x_y, corresp_points_x_y, test_rot, estim_x, estim_y, &num_pairs, &num_outliers, combined_x_y_and_pair_dists);
-        double tmd_1 = compute_tmd_point_to_point(local_points_x_y, corresp_points_x_y, SENSOR_FREQ, num_pairs, num_outliers);
+        compute_correspondence_pairs(local_points_x_y, SENSOR_FREQ, prev_points_x_y, points_normals_x_y, old_points_normals_x_y, corresp_points_x_y, test_rot, estim_x, estim_y, &num_pairs, &num_outliers, combined_x_y_and_pair_dists);
+        double tmd_1 = compute_tmd_point_to_point(local_points_x_y, corresp_points_x_y, points_normals_x_y, SENSOR_FREQ, num_pairs, num_outliers);
         //double tmd_1 = compute_total_matching_distance(local_points_x_y, corresp_points_x_y, SENSOR_FREQ, num_pairs, num_outliers, combined_x_y_and_pair_dists, &delta_Tx_1, &delta_Ty_1);
 
 
@@ -502,9 +539,9 @@ double gs_search_for_angle(double gs_lower_bound, double gs_upper_bound, double 
         num_pairs = 0; num_outliers = 0;
         estim_x = (101.6 * sin(g_rot*M_PI/180.0)) + (101.6 + prev_move) * -sin((g_rot + test_rot)*M_PI/180.0);
         estim_y = (101.6 * -cos(g_rot*M_PI/180.0)) + (101.6 + prev_move) * cos((g_rot + test_rot)*M_PI/180.0);
-        compute_correspondence_pairs(local_points_x_y, SENSOR_FREQ, prev_points_x_y, corresp_points_x_y, test_rot, estim_x, estim_y, &num_pairs, &num_outliers, combined_x_y_and_pair_dists);
+        compute_correspondence_pairs(local_points_x_y, SENSOR_FREQ, prev_points_x_y, points_normals_x_y, old_points_normals_x_y, corresp_points_x_y, test_rot, estim_x, estim_y, &num_pairs, &num_outliers, combined_x_y_and_pair_dists);
         
-        double tmd_2 = compute_tmd_point_to_point(local_points_x_y, corresp_points_x_y, SENSOR_FREQ, num_pairs, num_outliers);
+        double tmd_2 = compute_tmd_point_to_point(local_points_x_y, corresp_points_x_y, points_normals_x_y, SENSOR_FREQ, num_pairs, num_outliers);
         //double tmd_2 = compute_total_matching_distance(local_points_x_y, corresp_points_x_y, SENSOR_FREQ, num_pairs, num_outliers, combined_x_y_and_pair_dists, &delta_Tx_2, &delta_Ty_2);
         
         
@@ -522,9 +559,9 @@ double gs_search_for_angle(double gs_lower_bound, double gs_upper_bound, double 
     num_pairs = 0; num_outliers = 0;
     double estim_x = (101.6 * sin(g_rot*M_PI/180.0)) + (101.6 + prev_move) * -sin((g_rot + *optimal_rot)*M_PI/180.0);
     double estim_y = (101.6 * -cos(g_rot*M_PI/180.0)) + (101.6 + prev_move) * cos((g_rot + *optimal_rot)*M_PI/180.0);
-    compute_correspondence_pairs(local_points_x_y, SENSOR_FREQ, prev_points_x_y, corresp_points_x_y, *optimal_rot, estim_x, estim_y, &num_pairs, &num_outliers, combined_x_y_and_pair_dists);
+    compute_correspondence_pairs(local_points_x_y, SENSOR_FREQ, prev_points_x_y, points_normals_x_y, old_points_normals_x_y, corresp_points_x_y, *optimal_rot, estim_x, estim_y, &num_pairs, &num_outliers, combined_x_y_and_pair_dists);
     //return compute_total_matching_distance(local_points_x_y, corresp_points_x_y, SENSOR_FREQ, num_pairs, num_outliers, combined_x_y_and_pair_dists, &delta_Tx_2, &delta_Ty_2);
-    return compute_tmd_point_to_point(local_points_x_y, corresp_points_x_y, SENSOR_FREQ, num_pairs, num_outliers);;
+    return compute_tmd_point_to_point(local_points_x_y, corresp_points_x_y, points_normals_x_y, SENSOR_FREQ, num_pairs, num_outliers);;
 }
 
 RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * g_rot) {
@@ -533,6 +570,8 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
     double *points_x_y = malloc(SENSOR_FREQ * sizeof(double) * 2);
     double *corresp_points_x_y = malloc(SENSOR_FREQ * sizeof(double) * 2);
     double *combined_x_y_and_pair_dists = malloc(SENSOR_FREQ * sizeof(double) * 3);
+    double *points_normals_x_y = malloc(SENSOR_FREQ * sizeof(double) * 2);
+    double *old_points_normals_x_y = malloc(SENSOR_FREQ * sizeof(double) * 2);
     int num_pairs = 0, num_outliers = 0;
     //double gs_lower_bound = -30.0, gs_upper_bound = 30.0;
 
@@ -540,6 +579,8 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
     collect_range_scan(points, SENSOR_FREQ, SENSOR_PERIOD);    
     double trans_zero[2] = {0.0, 0.0};
     transform_points(points, local_points_x_y, SENSOR_FREQ, trans_zero, 0.0);
+    get_point_normals(local_points_x_y, SENSOR_FREQ, points_normals_x_y);
+    get_point_normals(prev->points_x_y, SENSOR_FREQ, old_points_normals_x_y);
     if (iterations > 0) {
         // use multi-hypothesis to find best angle to center golden section search around
         double best_tmd = DBL_MAX;
@@ -555,8 +596,8 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
             num_pairs = 0; num_outliers = 0;
             double estim_x = (101.6 * sin((*g_rot)*M_PI/180.0)) + (101.6 + prev_move) * -sin(((*g_rot) + test_rot)*M_PI/180.0);
             double estim_y = (101.6 * -cos((*g_rot)*M_PI/180.0)) + (101.6 + prev_move) * cos(((*g_rot) + test_rot)*M_PI/180.0);
-            compute_correspondence_pairs(local_points_x_y, SENSOR_FREQ, prev->points_x_y, corresp_points_x_y, test_rot, estim_x, estim_y, &num_pairs, &num_outliers, combined_x_y_and_pair_dists);
-            double tmd = compute_tmd_point_to_point(local_points_x_y, corresp_points_x_y, SENSOR_FREQ, num_pairs, num_outliers);
+            compute_correspondence_pairs(local_points_x_y, SENSOR_FREQ, prev->points_x_y, points_normals_x_y, old_points_normals_x_y, corresp_points_x_y, test_rot, estim_x, estim_y, &num_pairs, &num_outliers, combined_x_y_and_pair_dists);
+            double tmd = compute_tmd_point_to_point(local_points_x_y, corresp_points_x_y, points_normals_x_y, SENSOR_FREQ, num_pairs, num_outliers);
             //double tmd = compute_total_matching_distance(local_points_x_y, corresp_points_x_y, SENSOR_FREQ, num_pairs, num_outliers, combined_x_y_and_pair_dists, &delta_Tx_tmp, &delta_Ty_tmp);
             if (tmd < best_tmd) {
                 best_tmd = tmd;
@@ -567,8 +608,8 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
         // golden section search to find ω that minimizes total_matching_distance
         double refine_range = 4.0;  // search +- these degrees around best coarse angle
         double optimal_rot = 0.0;
-        gs_search_for_angle(best_rot - refine_range, best_rot + refine_range, &optimal_rot, *g_rot, local_points_x_y, prev->points_x_y, corresp_points_x_y, combined_x_y_and_pair_dists);
-        optimal_rot = optimal_rot * 0.5 + prev_rot * 0.5;
+        gs_search_for_angle(best_rot - refine_range, best_rot + refine_range, &optimal_rot, *g_rot, local_points_x_y, prev->points_x_y, points_normals_x_y, old_points_normals_x_y, corresp_points_x_y, combined_x_y_and_pair_dists);
+        optimal_rot = optimal_rot * (1-DEADRECKON_ROT_WEIGHT) + prev_rot * (DEADRECKON_ROT_WEIGHT);
 
         // compute T that minimizes error given found ω using point-to-point ICP: T = mean(P*) - mean(Rω * P1)
         double final_Tx = 0.0, final_Ty = 0.0;
@@ -577,16 +618,29 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
         num_pairs = 0; num_outliers = 0;
         double expected_Tx = (101.6 * sin((*g_rot)*M_PI/180.0)) + (101.6 + prev_move) * -sin(((*g_rot) + optimal_rot)*M_PI/180.0);
         double expected_Ty = (101.6 * -cos((*g_rot)*M_PI/180.0)) + (101.6 + prev_move) * cos(((*g_rot) + optimal_rot)*M_PI/180.0);
-        compute_correspondence_pairs(local_points_x_y, SENSOR_FREQ, prev->points_x_y, corresp_points_x_y, optimal_rot, expected_Tx, expected_Ty, &num_pairs, &num_outliers, combined_x_y_and_pair_dists);
+        compute_correspondence_pairs(local_points_x_y, SENSOR_FREQ, prev->points_x_y, points_normals_x_y, old_points_normals_x_y, corresp_points_x_y, optimal_rot, expected_Tx, expected_Ty, &num_pairs, &num_outliers, combined_x_y_and_pair_dists);
         double sum_corresp_x = 0, sum_corresp_y = 0;
         double sum_rot_x = 0, sum_rot_y = 0;
         double total_weight = 0;
         for (size_t i = 0; i < SENSOR_FREQ; ++i) {
             if (local_points_x_y[2*i] == 0.0 || local_points_x_y[2*i+1] == 0.0 || corresp_points_x_y[2*i] == 0.0 || corresp_points_x_y[2*i+1] == 0.0)
                 continue;
-            double scan_angle = ((double)i / (SENSOR_FREQ - 1) * 180.0 - 90.0) * M_PI / 180.0;
-            double weight = pow(cos(scan_angle * M_PI/180), 6); // weight by angle: 1 at center, 0 at edges
+            //double scan_angle = ((double)i / (SENSOR_FREQ - 1) * 180.0 - 90.0) * M_PI / 180.0;
+
+            // weight by incident angle to direction of car
+            double forward_x = 0.0, forward_y = 1.0;
+            double forward_alignment = fabs(points_normals_x_y[2*i] * forward_x + points_normals_x_y[2*i+1] * forward_y);
+
+            // weight by incident angle to sensor ray
+            double ray_x = local_points_x_y[2*i], ray_y = local_points_x_y[2*i+1];
+            double ray_mag = sqrt(ray_x*ray_x + ray_y*ray_y);
+            ray_x /= ray_mag;
+            ray_y /= ray_mag;
+            double ray_alignment = fabs(points_normals_x_y[2*i] * ray_x + points_normals_x_y[2*i+1] * ray_y);
+            double weight = 0.1 * pow(ray_alignment, 10) + 1.0 * pow(forward_alignment, 4);
+            //double weight = pow(cos(scan_angle * M_PI/180), 6); // weight by angle: 1 at center, 0 at edges
             if (weight <= 0.0) continue;
+
 
             double rot_x = cos(optimal_rot * M_PI/180) * local_points_x_y[2*i] - sin(optimal_rot * M_PI/180) * local_points_x_y[2*i+1];
             double rot_y = sin(optimal_rot * M_PI/180) * local_points_x_y[2*i] + cos(optimal_rot * M_PI/180) * local_points_x_y[2*i+1];
@@ -603,8 +657,8 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
             double icp_Tx = (sum_corresp_x - sum_rot_x) / total_weight;
             double icp_Ty = (sum_corresp_y - sum_rot_y) / total_weight;
             
-            final_Tx = (DEADRECKON_WEIGHT * expected_Tx) + ((1.0-DEADRECKON_WEIGHT) * icp_Tx);
-            final_Ty = (DEADRECKON_WEIGHT * expected_Ty) + ((1.0-DEADRECKON_WEIGHT) * icp_Ty);
+            final_Tx = (DEADRECKON_T_WEIGHT * expected_Tx) + ((1.0-DEADRECKON_T_WEIGHT) * icp_Tx);
+            final_Ty = (DEADRECKON_T_WEIGHT * expected_Ty) + ((1.0-DEADRECKON_T_WEIGHT) * icp_Ty);
             /*
             if (prev_move > 0.0) { // normal case
                 final_Tx = (DEADRECKON_WEIGHT * expected_Tx) + ((1.0-DEADRECKON_WEIGHT) * icp_Tx);
@@ -639,6 +693,8 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
     
     prev_move = 0.0;
     prev_rot = 0.0;
+    free(points_normals_x_y);
+    free(old_points_normals_x_y);
     free(local_points_x_y);
     free(combined_x_y_and_pair_dists);
     free(corresp_points_x_y);
