@@ -487,7 +487,7 @@ double compute_tmd_point_to_point(double points_x_y[], double corresp_points_x_y
         ray_x /= ray_mag;
         ray_y /= ray_mag;
         double ray_alignment = fabs(points_normals_x_y[2*i] * ray_x + points_normals_x_y[2*i+1] * ray_y);
-        double weight = 0.5 + 0.5*pow(ray_alignment, 20) + 1.0*pow(forward_alignment, 1);
+        double weight = 0.5;;// + 0.5*pow(ray_alignment, 20) + 1.0*pow(forward_alignment, 1);
         //double weight = pow(cos(scan_angle * M_PI/180), 6); // weight by angle: 1 at center, 0 at edges
         if (weight <= 0.0) continue;
         
@@ -525,8 +525,8 @@ double gs_search_for_angle(double gs_lower_bound, double gs_upper_bound, double 
         memset(corresp_points_x_y, 0, SENSOR_FREQ * sizeof(double) * 2);
         memset(combined_x_y_and_pair_dists, 0, SENSOR_FREQ * sizeof(double) * 3);
         num_pairs = 0; num_outliers = 0;
-        double estim_x = (101.6 * sin(g_rot*M_PI/180.0)) + (101.6 + prev_move) * -sin((g_rot + test_rot)*M_PI/180.0);
-        double estim_y = (101.6 * -cos(g_rot*M_PI/180.0)) + (101.6 + prev_move) * cos((g_rot + test_rot)*M_PI/180.0);
+        double estim_x = (SENSOR_OFFSET_FROM_PIVOT * sin(g_rot*M_PI/180.0)) + (SENSOR_OFFSET_FROM_PIVOT + prev_move) * -sin((g_rot + test_rot)*M_PI/180.0);
+        double estim_y = (SENSOR_OFFSET_FROM_PIVOT * -cos(g_rot*M_PI/180.0)) + (SENSOR_OFFSET_FROM_PIVOT + prev_move) * cos((g_rot + test_rot)*M_PI/180.0);
         compute_correspondence_pairs(local_points_x_y, SENSOR_FREQ, prev_points_x_y, points_normals_x_y, old_points_normals_x_y, corresp_points_x_y, test_rot, estim_x, estim_y, &num_pairs, &num_outliers, combined_x_y_and_pair_dists);
         double tmd_1 = compute_tmd_point_to_point(local_points_x_y, corresp_points_x_y, points_normals_x_y, SENSOR_FREQ, num_pairs, num_outliers);
         //double tmd_1 = compute_total_matching_distance(local_points_x_y, corresp_points_x_y, SENSOR_FREQ, num_pairs, num_outliers, combined_x_y_and_pair_dists, &delta_Tx_1, &delta_Ty_1);
@@ -537,8 +537,8 @@ double gs_search_for_angle(double gs_lower_bound, double gs_upper_bound, double 
         memset(corresp_points_x_y, 0, SENSOR_FREQ * sizeof(double) * 2);
         memset(combined_x_y_and_pair_dists, 0, SENSOR_FREQ * sizeof(double) * 3);
         num_pairs = 0; num_outliers = 0;
-        estim_x = (101.6 * sin(g_rot*M_PI/180.0)) + (101.6 + prev_move) * -sin((g_rot + test_rot)*M_PI/180.0);
-        estim_y = (101.6 * -cos(g_rot*M_PI/180.0)) + (101.6 + prev_move) * cos((g_rot + test_rot)*M_PI/180.0);
+        estim_x = (SENSOR_OFFSET_FROM_PIVOT * sin(g_rot*M_PI/180.0)) + (SENSOR_OFFSET_FROM_PIVOT + prev_move) * -sin((g_rot + test_rot)*M_PI/180.0);
+        estim_y = (SENSOR_OFFSET_FROM_PIVOT * -cos(g_rot*M_PI/180.0)) + (SENSOR_OFFSET_FROM_PIVOT + prev_move) * cos((g_rot + test_rot)*M_PI/180.0);
         compute_correspondence_pairs(local_points_x_y, SENSOR_FREQ, prev_points_x_y, points_normals_x_y, old_points_normals_x_y, corresp_points_x_y, test_rot, estim_x, estim_y, &num_pairs, &num_outliers, combined_x_y_and_pair_dists);
         
         double tmd_2 = compute_tmd_point_to_point(local_points_x_y, corresp_points_x_y, points_normals_x_y, SENSOR_FREQ, num_pairs, num_outliers);
@@ -557,8 +557,8 @@ double gs_search_for_angle(double gs_lower_bound, double gs_upper_bound, double 
     memset(corresp_points_x_y, 0, SENSOR_FREQ * sizeof(double) * 2);
     memset(combined_x_y_and_pair_dists, 0, SENSOR_FREQ * sizeof(double) * 3);
     num_pairs = 0; num_outliers = 0;
-    double estim_x = (101.6 * sin(g_rot*M_PI/180.0)) + (101.6 + prev_move) * -sin((g_rot + *optimal_rot)*M_PI/180.0);
-    double estim_y = (101.6 * -cos(g_rot*M_PI/180.0)) + (101.6 + prev_move) * cos((g_rot + *optimal_rot)*M_PI/180.0);
+    double estim_x = (SENSOR_OFFSET_FROM_PIVOT * sin(g_rot*M_PI/180.0)) + (SENSOR_OFFSET_FROM_PIVOT + prev_move) * -sin((g_rot + *optimal_rot)*M_PI/180.0);
+    double estim_y = (SENSOR_OFFSET_FROM_PIVOT * -cos(g_rot*M_PI/180.0)) + (SENSOR_OFFSET_FROM_PIVOT + prev_move) * cos((g_rot + *optimal_rot)*M_PI/180.0);
     compute_correspondence_pairs(local_points_x_y, SENSOR_FREQ, prev_points_x_y, points_normals_x_y, old_points_normals_x_y, corresp_points_x_y, *optimal_rot, estim_x, estim_y, &num_pairs, &num_outliers, combined_x_y_and_pair_dists);
     //return compute_total_matching_distance(local_points_x_y, corresp_points_x_y, SENSOR_FREQ, num_pairs, num_outliers, combined_x_y_and_pair_dists, &delta_Tx_2, &delta_Ty_2);
     return compute_tmd_point_to_point(local_points_x_y, corresp_points_x_y, points_normals_x_y, SENSOR_FREQ, num_pairs, num_outliers);;
@@ -585,8 +585,8 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
         // use multi-hypothesis to find best angle to center golden section search around
         double best_tmd = DBL_MAX;
         double best_rot = 0.0;
-        int num_coarse = 15;  // try this many angles between evenly spaced among prev_rot +- search_half_width
-        double search_half_width = 15.0;
+        int num_coarse = 21;  // try this many angles between evenly spaced among prev_rot +- search_half_width
+        double search_half_width = 10.0;
         double delta_Tx_tmp = 0, delta_Ty_tmp = 0;
         for (int s = 0; s < num_coarse; ++s) {
             double test_rot = (prev_rot - search_half_width) + s * (2*search_half_width / (num_coarse - 1));
@@ -594,8 +594,8 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
             memset(corresp_points_x_y, 0, SENSOR_FREQ * sizeof(double) * 2);
             memset(combined_x_y_and_pair_dists, 0, SENSOR_FREQ * sizeof(double) * 3);
             num_pairs = 0; num_outliers = 0;
-            double estim_x = (101.6 * sin((*g_rot)*M_PI/180.0)) + (101.6 + prev_move) * -sin(((*g_rot) + test_rot)*M_PI/180.0);
-            double estim_y = (101.6 * -cos((*g_rot)*M_PI/180.0)) + (101.6 + prev_move) * cos(((*g_rot) + test_rot)*M_PI/180.0);
+            double estim_x = (SENSOR_OFFSET_FROM_PIVOT * sin((*g_rot)*M_PI/180.0)) + (SENSOR_OFFSET_FROM_PIVOT + prev_move) * -sin(((*g_rot) + test_rot)*M_PI/180.0);
+            double estim_y = (SENSOR_OFFSET_FROM_PIVOT * -cos((*g_rot)*M_PI/180.0)) + (SENSOR_OFFSET_FROM_PIVOT + prev_move) * cos(((*g_rot) + test_rot)*M_PI/180.0);
             compute_correspondence_pairs(local_points_x_y, SENSOR_FREQ, prev->points_x_y, points_normals_x_y, old_points_normals_x_y, corresp_points_x_y, test_rot, estim_x, estim_y, &num_pairs, &num_outliers, combined_x_y_and_pair_dists);
             double tmd = compute_tmd_point_to_point(local_points_x_y, corresp_points_x_y, points_normals_x_y, SENSOR_FREQ, num_pairs, num_outliers);
             //double tmd = compute_total_matching_distance(local_points_x_y, corresp_points_x_y, SENSOR_FREQ, num_pairs, num_outliers, combined_x_y_and_pair_dists, &delta_Tx_tmp, &delta_Ty_tmp);
@@ -606,18 +606,31 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
         }
 
         // golden section search to find ω that minimizes total_matching_distance
-        double refine_range = 4.0;  // search +- these degrees around best coarse angle
+        double refine_range = 10.0;  // search +- these degrees around best coarse angle
         double optimal_rot = 0.0;
         gs_search_for_angle(best_rot - refine_range, best_rot + refine_range, &optimal_rot, *g_rot, local_points_x_y, prev->points_x_y, points_normals_x_y, old_points_normals_x_y, corresp_points_x_y, combined_x_y_and_pair_dists);
         optimal_rot = optimal_rot * (1-DEADRECKON_ROT_WEIGHT) + prev_rot * (DEADRECKON_ROT_WEIGHT);
+        // compare tmd for optimal_rot to tmd for prev_rot here and just use prev_rot completely if optimal_rot is not better TO DO <<<<<<<<<
+        memset(corresp_points_x_y, 0, SENSOR_FREQ * sizeof(double) * 2);
+        memset(combined_x_y_and_pair_dists, 0, SENSOR_FREQ * sizeof(double) * 3);
+        num_pairs = 0; num_outliers = 0;
+        double dr_estim_x = (SENSOR_OFFSET_FROM_PIVOT * sin((*g_rot)*M_PI/180.0)) + (SENSOR_OFFSET_FROM_PIVOT + prev_move) * -sin(((*g_rot) + prev_rot)*M_PI/180.0);
+        double dr_estim_y = (SENSOR_OFFSET_FROM_PIVOT * -cos((*g_rot)*M_PI/180.0)) + (SENSOR_OFFSET_FROM_PIVOT + prev_move) * cos(((*g_rot) + prev_rot)*M_PI/180.0);
+        compute_correspondence_pairs(local_points_x_y, SENSOR_FREQ, prev->points_x_y, points_normals_x_y, old_points_normals_x_y, corresp_points_x_y, prev_rot, dr_estim_x, dr_estim_y, &num_pairs, &num_outliers, combined_x_y_and_pair_dists);
+        double dr_tmd = compute_tmd_point_to_point(local_points_x_y, corresp_points_x_y, points_normals_x_y, SENSOR_FREQ, num_pairs, num_outliers);
+        printf("tmd found dr %f icp %f\n", dr_tmd, best_tmd);
+        if (best_tmd > dr_tmd * 0.95) {// use dead reckoning rot instead if its tmd was better than the rot found by ICP
+            optimal_rot = prev_rot;
+            printf("chose dr rot (%f) instead of icp rot (%f) because its tmd was better (%f vs %f)\n", prev_rot, optimal_rot, dr_tmd, best_tmd);
+        }
 
         // compute T that minimizes error given found ω using point-to-point ICP: T = mean(P*) - mean(Rω * P1)
         double final_Tx = 0.0, final_Ty = 0.0;
         memset(corresp_points_x_y, 0, SENSOR_FREQ * sizeof(double) * 2);
         memset(combined_x_y_and_pair_dists, 0, SENSOR_FREQ * sizeof(double) * 3);
         num_pairs = 0; num_outliers = 0;
-        double expected_Tx = (101.6 * sin((*g_rot)*M_PI/180.0)) + (101.6 + prev_move) * -sin(((*g_rot) + optimal_rot)*M_PI/180.0);
-        double expected_Ty = (101.6 * -cos((*g_rot)*M_PI/180.0)) + (101.6 + prev_move) * cos(((*g_rot) + optimal_rot)*M_PI/180.0);
+        double expected_Tx = (SENSOR_OFFSET_FROM_PIVOT * sin((*g_rot)*M_PI/180.0)) + (SENSOR_OFFSET_FROM_PIVOT + prev_move) * -sin(((*g_rot) + optimal_rot)*M_PI/180.0);
+        double expected_Ty = (SENSOR_OFFSET_FROM_PIVOT * -cos((*g_rot)*M_PI/180.0)) + (SENSOR_OFFSET_FROM_PIVOT + prev_move) * cos(((*g_rot) + optimal_rot)*M_PI/180.0);
         compute_correspondence_pairs(local_points_x_y, SENSOR_FREQ, prev->points_x_y, points_normals_x_y, old_points_normals_x_y, corresp_points_x_y, optimal_rot, expected_Tx, expected_Ty, &num_pairs, &num_outliers, combined_x_y_and_pair_dists);
         double sum_corresp_x = 0, sum_corresp_y = 0;
         double sum_rot_x = 0, sum_rot_y = 0;
@@ -714,7 +727,7 @@ void motor_rotate(double rot_needed) { // rotate rot_needed degrees
         changeSpeedA(1, MOVE_SPEED);
         changeSpeedB(0, MOVE_SPEED);
     }
-    vTaskDelay(pdMS_TO_TICKS(25.0 * fabs(rot_needed)));
+    vTaskDelay(pdMS_TO_TICKS(18.8 * fabs(rot_needed)));
     changeSpeedA(0, 0);
     changeSpeedB(0, 0);
 }
