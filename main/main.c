@@ -487,13 +487,14 @@ double compute_tmd_point_to_point(double points_x_y[], double corresp_points_x_y
         ray_x /= ray_mag;
         ray_y /= ray_mag;
         double ray_alignment = fabs(points_normals_x_y[2*i] * ray_x + points_normals_x_y[2*i+1] * ray_y);
-        double weight = 0.5;;// + 0.5*pow(ray_alignment, 20) + 1.0*pow(forward_alignment, 1);
+        double weight = 1.0; //0.5*pow(ray_alignment, 5);// + 1.0*pow(forward_alignment, 1);
         //double weight = pow(cos(scan_angle * M_PI/180), 6); // weight by angle: 1 at center, 0 at edges
         if (weight <= 0.0) continue;
         
         total_weight += weight;
         sum_squared_residuals += weight * pow(dx, 2) + weight * pow(dy, 2);
     }
+    //printf("total weight %f\n", total_weight);
 
     return 1.0 / (total_weight + num_outliers) * (sum_squared_residuals + num_outliers * pow(MAX_DISTANCE_PER_ITERATION, 2));
 }
@@ -586,7 +587,7 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
         double best_tmd = DBL_MAX;
         double best_rot = 0.0;
         int num_coarse = 21;  // try this many angles between evenly spaced among prev_rot +- search_half_width
-        double search_half_width = 10.0;
+        double search_half_width = 5.0;
         double delta_Tx_tmp = 0, delta_Ty_tmp = 0;
         for (int s = 0; s < num_coarse; ++s) {
             double test_rot = (prev_rot - search_half_width) + s * (2*search_half_width / (num_coarse - 1));
@@ -682,7 +683,7 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
             }
                 */
             
-            printf("total weight %f\t icp_Tx %f\t icp_Ty %f\t expected_Tx %f\t expected_Ty %f\n", total_weight, icp_Tx, icp_Ty, expected_Tx, expected_Ty);
+            //printf("total weight %f\t icp_Tx %f\t icp_Ty %f\t expected_Tx %f\t expected_Ty %f\n", total_weight, icp_Tx, icp_Ty, expected_Tx, expected_Ty);
             
         }
 
@@ -727,7 +728,7 @@ void motor_rotate(double rot_needed) { // rotate rot_needed degrees
         changeSpeedA(1, MOVE_SPEED);
         changeSpeedB(0, MOVE_SPEED);
     }
-    vTaskDelay(pdMS_TO_TICKS(18.8 * fabs(rot_needed)));
+    vTaskDelay(pdMS_TO_TICKS(24.4 * fabs(rot_needed))); // 18.8
     changeSpeedA(0, 0);
     changeSpeedB(0, 0);
 }
