@@ -19,6 +19,7 @@ const Dev_t sensor = 0x29;
 uint8_t map[MAP_SIZE][MAP_SIZE] = {0};
 uint8_t map_tree[MAP_SIZE][MAP_SIZE] = {0};
 bool coarse_map[MAP_SIZE / COARSE_RATIO][MAP_SIZE / COARSE_RATIO] = {false};
+bool coarse_map_open[MAP_SIZE / COARSE_RATIO][MAP_SIZE / COARSE_RATIO] = {false};
 bool coarse_tree_map[MAP_SIZE / COARSE_RATIO][MAP_SIZE / COARSE_RATIO] = {false};
 int coarse_indices[(MAP_SIZE / COARSE_RATIO) * (MAP_SIZE / COARSE_RATIO)];
 double prev_move = 0.0, prev_rot = 0.0;
@@ -784,6 +785,7 @@ int find_min_f(AStarNode * open, int len) {
     return min_f_i;
 }
 
+// do A* on cells in coarse map to find goal
 void next_coarse_path_node(double start_pos[], double goal_pos[], int next_coarse_pos[]) {
     const int coarse_map_width = (MAP_SIZE / COARSE_RATIO);
     int coarse_start_pos[2] = {start_pos[0] / COARSE_RATIO, start_pos[1] / COARSE_RATIO};
@@ -791,7 +793,6 @@ void next_coarse_path_node(double start_pos[], double goal_pos[], int next_coars
     int coarse_goal = (goal_pos[1] / COARSE_RATIO) * coarse_map_width + (goal_pos[0] / COARSE_RATIO);
     int total_coarse_cells = coarse_map_width * coarse_map_width;
 
-    // do A* on cells in coarse map to find goal
     AStarNode * open = malloc(sizeof(AStarNode) * total_coarse_cells);
     int * parent = malloc(sizeof(int) * total_coarse_cells);
     double * g_score = malloc(sizeof(double) * total_coarse_cells);
@@ -838,8 +839,8 @@ void next_coarse_path_node(double start_pos[], double goal_pos[], int next_coars
             for (int j = -1; j <= 1; ++j) {
                 if (i == 0 && j == 0) continue; // skip self
                 int neighbor_y = cur_y + i, neighbor_x = cur_x + j;
-                if (neighbor_y < 0 || neighbor_x < 0 || neighbor_y >= coarse_map_width || neighbor_x >= coarse_map_width || coarse_map[neighbor_y][neighbor_x]) 
-                    continue; // skip if neighbor (or polar neighbor to it) OOB or obstacle
+                if (neighbor_y < 0 || neighbor_x < 0 || neighbor_y >= coarse_map_width || neighbor_x >= coarse_map_width || coarse_map[neighbor_y][neighbor_x] || !coarse_map_open[neighbor_y][neighbor_x])
+                    continue; // skip if neighbor (or polar neighbor to it) OOB or obstacle or too far from a known obstacle
                 // || coarse_map[neighbor_y-1][neighbor_x] || coarse_map[neighbor_y+1][neighbor_x] || coarse_map[neighbor_y][neighbor_x-1] || coarse_map[neighbor_y][neighbor_x+1]
                 int neighbor = neighbor_y * coarse_map_width + neighbor_x;
                 if (!open[neighbor].open && open[neighbor].f != DBL_MAX) continue; // neighbor already closed
@@ -1010,11 +1011,30 @@ void fill_coarse_map() {
     // fill coarse_map with obstacles 
     for (size_t i = 0; i < MAP_SIZE; ++i) {
         for (size_t j = 0; j < MAP_SIZE; ++j) {
-            if (map[i][j] != 0 && map[i][j] != 252)
+            if (map[i][j] != 0 && map[i][j] != 252 && map[i][j] != 250)
                 coarse_map[i/COARSE_RATIO][j/COARSE_RATIO] = true;
         }
     }
 
+    // inflate obstacle cells on open coarse map by 8 (each coarse cell is 7.5cm so 8 is around 2 feet)
+    const int w = MAP_SIZE / COARSE_RATIO;
+    bool temp[w][w];
+    memcpy(temp, coarse_map, sizeof(temp));
+    temp[w/2][w/2] = true; // add start position as initial nucleus of open cells
+    for (int i = 0; i < w; ++i) {
+        for (int j = 0; j < w; ++j) {
+            if (temp[i][j]) {
+                for (int d_i = -OPEN_INFLATION_CONST; d_i <= OPEN_INFLATION_CONST; ++d_i) {
+                    for (int d_j = -OPEN_INFLATION_CONST; d_j <= OPEN_INFLATION_CONST; ++d_j) {
+                        if (i+d_i >= 0 && i+d_i < w && j+d_j >= 0 && j+d_j < w)
+                            coarse_map_open[i+d_i][j+d_j] = true;
+                    }
+                }
+            }
+        }
+    }
+
+    // I intend to inflate obstacle cells by 1 on coarse_map once I pinpoint the collision bug with the new coarse cell display
     /*
     // inflate obstacle cells by 1
     const int w = MAP_SIZE / COARSE_RATIO;
@@ -1033,6 +1053,23 @@ void fill_coarse_map() {
         }
     }
     */
+
+
+    // shade the full coarse map cells on the map
+    const int w = MAP_SIZE / COARSE_RATIO;
+    for (int i = 0; i < w; ++i) {
+        for (int j = 0; j < w; ++j) {
+            if (coarse_map[i][j]) {
+                int k_lim = (i+1)*COARSE_RATIO;
+                int l_lim = (j+1)*COARSE_RATIO;
+                for (int k = i * COARSE_RATIO; k < k_lim; ++k) {
+                    for (int l = j * COARSE_RATIO; l < l_lim; ++l) {
+                        if (map[k][l] == 0) map[k][l] = 250;
+                    }
+                }
+            }
+        }
+    }
 }
 
 // 0 = check edge constraint on coarse_map, 1 = draw edge constraint on coarse_map, 2 = draw RRT on map

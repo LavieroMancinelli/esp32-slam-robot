@@ -80,6 +80,7 @@ static esp_err_t index_handler(httpd_req_t *req) {
         "           else if (data[i] == 2) values = [0, 0, 255, 255];"
         "           else if (data[i] == 3) values = [255, 0, 255, 255];"
         "           else if (data[i] == 4) values = [0, 255, 0, 255];"
+        "           else if (data[i] == 250) values = [200, 200, 200, 255];"    // coarse cell
         "           else if (data[i] == 251) values = [120, 50, 255, 255];"     // A* path
         "           else if (data[i] == 252) values = [240, 240, 240, 255];"    // coarse gridline
         "           else if (data[i] == 253) values = [255, 150, 0, 255];"      // start/goal

@@ -35,4 +35,5 @@ static const char* TAG = "CarModule";
 #define DEADRECKON_T_WEIGHT 0.95 // weight of deadreckoning estimation vs icp in translation computation
 #define DEADRECKON_ROT_WEIGHT 0.0 // weight of deadreckoning estimation vs icp in rotation computation
 #define SENSOR_OFFSET_FROM_PIVOT 70.0 // mm distance between sensor and pivot point between rear wheels
+#define OPEN_INFLATION_CONST 8 // pathing will search through coarse cells that are this number of cells within an occupied coarse cell
 #endif
