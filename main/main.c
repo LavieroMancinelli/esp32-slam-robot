@@ -185,9 +185,6 @@ void collect_range_scan(uint16_t points[], int freq, int dur) {
     if (points[freq-2] == 0) points[freq-1] = 0;
     
     recenter_servo();
-
-
-    
 }
 
 void matrix_mult_3x3_and_3x1(double a[3][3], double b[3]) { // 3x3 matrices, a times b, output saved in b
@@ -612,7 +609,6 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
         double optimal_rot = 0.0;
         gs_search_for_angle(best_rot - refine_range, best_rot + refine_range, &optimal_rot, *g_rot, local_points_x_y, prev->points_x_y, points_normals_x_y, old_points_normals_x_y, corresp_points_x_y, combined_x_y_and_pair_dists);
         optimal_rot = optimal_rot * (1-DEADRECKON_ROT_WEIGHT) + prev_rot * (DEADRECKON_ROT_WEIGHT);
-        // compare tmd for optimal_rot to tmd for prev_rot here and just use prev_rot completely if optimal_rot is not better TO DO <<<<<<<<<
         memset(corresp_points_x_y, 0, SENSOR_FREQ * sizeof(double) * 2);
         memset(combined_x_y_and_pair_dists, 0, SENSOR_FREQ * sizeof(double) * 3);
         num_pairs = 0; num_outliers = 0;
@@ -729,7 +725,7 @@ void motor_rotate(double rot_needed) { // rotate rot_needed degrees
         changeSpeedA(1, MOVE_SPEED);
         changeSpeedB(0, MOVE_SPEED);
     }
-    vTaskDelay(pdMS_TO_TICKS(24.4 * fabs(rot_needed))); // 18.8
+    vTaskDelay(pdMS_TO_TICKS(14.2 * fabs(rot_needed))); // 18.8 24.4
     changeSpeedA(0, 0);
     changeSpeedB(0, 0);
 }
@@ -740,7 +736,7 @@ void motor_straight(double dist_needed) { // move dist_needed mm bounded by MAX_
 
     changeSpeedA(0, MOVE_SPEED);
     changeSpeedB(0, MOVE_SPEED);
-    vTaskDelay(pdMS_TO_TICKS(21.4 * dist_needed)); // coefficient based on MOVE_SPEED 25
+    vTaskDelay(pdMS_TO_TICKS(13.5 * dist_needed)); // coefficient based on MOVE_SPEED 25  21.4
     changeSpeedA(0, 0);
     changeSpeedB(0, 0);
 }
@@ -876,10 +872,11 @@ bool next_coarse_path_node(double start_pos[], double goal_pos[], int cur_goal, 
     int cur = coarse_goal;  // if the goal was reached, trace path from goal, 
     if (!goal_found) {      // otherwise, update goal_pos to closest by euclidean reached cell to goal and trace path from that
         cur = closest_to_goal;
-        int new_goal_x = (closest_to_goal % coarse_map_width) * COARSE_RATIO + COARSE_RATIO / 2;
-        int new_goal_y = (closest_to_goal / coarse_map_width) * COARSE_RATIO + COARSE_RATIO / 2;
-        goal_pos[2*cur_goal+0] = new_goal_x;
-        goal_pos[2*cur_goal+1] = new_goal_y;
+        // can't set the actual goal to this because this would trigger if there just hasn't been any obstacles seen yet
+        //int new_goal_x = (closest_to_goal % coarse_map_width) * COARSE_RATIO + COARSE_RATIO / 2;
+        //int new_goal_y = (closest_to_goal / coarse_map_width) * COARSE_RATIO + COARSE_RATIO / 2;
+        //goal_pos[2*cur_goal+0] = new_goal_x;
+        //goal_pos[2*cur_goal+1] = new_goal_y;
     }
     int next = cur;
     while (parent[cur] != -1 && parent[parent[cur]] != -1) {    // trace path to 2nd after start
@@ -889,7 +886,7 @@ bool next_coarse_path_node(double start_pos[], double goal_pos[], int cur_goal, 
         // draw each node in path on map
         int node_center_x = (next % coarse_map_width) * COARSE_RATIO + COARSE_RATIO / 2;
         int node_center_y = (next / coarse_map_width) * COARSE_RATIO + COARSE_RATIO / 2;
-        map_tree[node_center_x][-node_center_y] = 251;
+        map_tree[node_center_y][node_center_x] = 251;
     }
     next_coarse_pos[0] = next % coarse_map_width; // x
     next_coarse_pos[1] = next / coarse_map_width; // y
@@ -932,7 +929,7 @@ void SLAM_run() {
         if (state == PLANNING) {
             memcpy(map_tree, map, sizeof(uint8_t) * MAP_SIZE * MAP_SIZE);
             double cur_map_pos[2] = {-(global_trans[0] / MAP_RATIO) + MAP_SIZE / 2, -(global_trans[1] / MAP_RATIO) + MAP_SIZE / 2};
-            double goal_map_pos[2] = {goals[2*cur_goal+1], goals[2*cur_goal+0]};
+            //double goal_map_pos[2] = {goals[2*cur_goal+1], goals[2*cur_goal+0]};
 
             /*
             RRT_node * RRT_root = compute_RRT(cur_map_pos);
@@ -948,25 +945,34 @@ void SLAM_run() {
             */
 
             // find next node in BFS on coarse_map
-            if (next_coarse_path_node(cur_map_pos, goal_map_pos, cur_goal, goal_reached, next_coarse_pos)) { // true means the robot is at the goal, so switch goal to the next one
+            if (next_coarse_path_node(cur_map_pos, goals, cur_goal, goal_reached, next_coarse_pos)) { // true means the robot is at the goal, so switch goal to the next one
                 goal_reached[cur_goal] = true;
                 while (cur_goal < 8 && !goal_reached[cur_goal]) ++cur_goal;
                 if (cur_goal >= 8) return; // all the goals have been reached
-                next_coarse_path_node(cur_map_pos, goal_map_pos, cur_goal, goal_reached, next_coarse_pos); // replan path again because goal has been updated
-            }
-            int map_cell_center_x = next_coarse_pos[0] * COARSE_RATIO + COARSE_RATIO / 2;
-            int map_cell_center_y = next_coarse_pos[1] * COARSE_RATIO + COARSE_RATIO / 2;
-            next_world_pos[0] = -(map_cell_center_x - MAP_SIZE / 2) * MAP_RATIO;
-            next_world_pos[1] = -(map_cell_center_y - MAP_SIZE / 2) * MAP_RATIO;
+                next_coarse_path_node(cur_map_pos, goals, cur_goal, goal_reached, next_coarse_pos); // replan path again because goal has been updated
+            }   
+            //int map_cell_center_x = next_coarse_pos[0] * COARSE_RATIO + COARSE_RATIO / 2;
+            //int map_cell_center_y = next_coarse_pos[1] * COARSE_RATIO + COARSE_RATIO / 2;
+            int map_cell_center_x = next_coarse_pos[0] * COARSE_RATIO + 1 + (COARSE_RATIO - 1) / 2;
+            int map_cell_center_y = next_coarse_pos[1] * COARSE_RATIO + 1 + (COARSE_RATIO - 1) / 2;
+            next_world_pos[0] = -(map_cell_center_y - MAP_SIZE / 2) * MAP_RATIO;
+            next_world_pos[1] = (map_cell_center_x - MAP_SIZE / 2) * MAP_RATIO;
             
             map_tree[(int)cur_map_pos[1]][(int)cur_map_pos[0]] = 253;   // draw start on map
             map_tree[(int)goals[2*cur_goal+1]][(int)goals[2*cur_goal+0]] = 253;     // draw goal on map
-            map_tree[(int)map_cell_center_x][-(int)map_cell_center_y] = 254;   // draw next node endpoint on map
+            map_tree[(int)map_cell_center_y][(int)map_cell_center_x] = 254;   // draw next node endpoint on map
 
 
             // to move towards next node endpoint, decide whether to rotate or move straight
-            double goal_x = next_world_pos[0], goal_y = next_world_pos[1], cur_x = global_trans[1], cur_y = global_trans[0];
+            double goal_x = next_world_pos[0], goal_y = next_world_pos[1], cur_x = global_trans[1], cur_y = -global_trans[0];
             double rot_needed = atan2((goal_y - cur_y), (goal_x - cur_x)) * 180.0 / M_PI;
+            
+            // normalize both rotations
+            while (rot_needed > 180.0) rot_needed -= 360.0;
+            while (rot_needed < -180.0) rot_needed += 360.0;
+            while (global_rot > 180.0) global_rot -= 360.0;
+            while (global_rot < -180.0) global_rot += 360.0;
+
             double rot_relative = rot_needed - global_rot;
             while (rot_relative > 180.0) rot_relative -= 360.0;
             while (rot_relative < -180.0) rot_relative += 360.0;
@@ -989,7 +995,7 @@ void SLAM_run() {
             while (rot_needed < -180.0) rot_needed += 360.0;
             if (fabs(rot_needed) > PLANNING_ROTATION_TOLERANCE) {
                 motor_rotate(rot_needed);
-                state = PLANNING; // TEMPORARY change to test if behavior is stable when planning after every rotation
+                //state = PLANNING; // TEMPORARY change to test if behavior is stable when planning after every rotation
             } else {
                 state = MOVING;
             }
@@ -1056,7 +1062,7 @@ void fill_coarse_map() {
     // fill coarse_map with obstacles 
     for (size_t i = 0; i < MAP_SIZE; ++i) {
         for (size_t j = 0; j < MAP_SIZE; ++j) {
-            if (map[i][j] != 0 && map[i][j] != 252 && map[i][j] != 250)
+            if (map[i][j] != 0 && map[i][j] != 252 && map[i][j] != 250 && map[i][j] != 249)
                 coarse_map[i/COARSE_RATIO][j/COARSE_RATIO] = true;
         }
     }
@@ -1072,7 +1078,7 @@ void fill_coarse_map() {
                 for (int d_i = -OPEN_INFLATION_CONST; d_i <= OPEN_INFLATION_CONST; ++d_i) {
                     for (int d_j = -OPEN_INFLATION_CONST; d_j <= OPEN_INFLATION_CONST; ++d_j) {
                         if (i+d_i >= 0 && i+d_i < w && j+d_j >= 0 && j+d_j < w)
-                            coarse_map_open[i+d_i][j+d_j] = true;
+                            coarse_map_open[i+d_i][j+d_j] = true;   
                     }
                 }
             }
@@ -1080,10 +1086,10 @@ void fill_coarse_map() {
     }
 
     // I intend to inflate obstacle cells by 1 on coarse_map once I pinpoint the collision bug with the new coarse cell display
-    /*
+    
     // inflate obstacle cells by 1
-    const int w = MAP_SIZE / COARSE_RATIO;
-    bool temp[w][w];
+    //const int w = MAP_SIZE / COARSE_RATIO;
+    //bool temp[w][w];
     memcpy(temp, coarse_map, sizeof(temp));
     for (int i = 0; i < w; ++i) {
         for (int j = 0; j < w; ++j) {
@@ -1097,19 +1103,28 @@ void fill_coarse_map() {
             }
         }
     }
-    */
+     
 
 
     // shade the full coarse map cells on the map
-    const int w = MAP_SIZE / COARSE_RATIO;
     for (int i = 0; i < w; ++i) {
-        for (int j = 0; j < w; ++j) {
-            if (coarse_map[i][j]) {
+        for (int j = 0; j < w; ++j) { 
+            if (coarse_map_open[i][j]) { // shade open coarse cells (near obstacle)
                 int k_lim = (i+1)*COARSE_RATIO;
                 int l_lim = (j+1)*COARSE_RATIO;
                 for (int k = i * COARSE_RATIO; k < k_lim; ++k) {
                     for (int l = j * COARSE_RATIO; l < l_lim; ++l) {
-                        if (map[k][l] == 0) map[k][l] = 250;
+                        if (map[k][l] == 0) map[k][l] = 249;
+                    }
+                }
+            }
+
+            if (coarse_map[i][j]) { // shade occupied coarse cells (have obstacle)
+                int k_lim = (i+1)*COARSE_RATIO;
+                int l_lim = (j+1)*COARSE_RATIO;
+                for (int k = i * COARSE_RATIO; k < k_lim; ++k) {
+                    for (int l = j * COARSE_RATIO; l < l_lim; ++l) {
+                        if (map[k][l] == 0 || map[k][l] == 249) map[k][l] = 250;
                     }
                 }
             }
@@ -1181,8 +1196,7 @@ RRT_node * compute_RRT(double root_pos[]) {
         size_t selected_coarse_map_index = coarse_indices[random_coarse_map_index_index];
         coarse_indices[random_coarse_map_index_index] = coarse_indices[last_coarse_index];
         coarse_indices[last_coarse_index] = selected_coarse_map_index;
-        size_t random_map_index = selected_coarse_map_index * (COARSE_RATIO * COARSE_RATIO) + 
-                (rand() % (COARSE_RATIO*COARSE_RATIO));
+        size_t random_map_index = selected_coarse_map_index * (COARSE_RATIO * COARSE_RATIO) + (rand() % (COARSE_RATIO*COARSE_RATIO));
         --last_coarse_index;
 
         size_t random_map_y = random_map_index / MAP_SIZE, random_map_x = random_map_index % MAP_SIZE;
@@ -1358,10 +1372,26 @@ void app_main(void)
     changeSpeedA(0, 0);
     changeSpeedB(0, 0);
 
+
+
     // distance sensor i2c
     i2c_master_init();
-    if (VL53L4CD_SensorInit(sensor) != 0)
-        printf("Sensor init failed");
+    /*
+    for (uint8_t addr = 1; addr < 127; addr++) {
+        i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+        i2c_master_start(cmd);
+        i2c_master_write_byte(cmd, (addr << 1) | I2C_MASTER_WRITE, true);
+        i2c_master_stop(cmd);
+        esp_err_t ret = i2c_master_cmd_begin(I2C_NUM_0, cmd, pdMS_TO_TICKS(50));
+        i2c_cmd_link_delete(cmd);
+        if (ret == ESP_OK) {
+            printf("Found device at address 0x%02X\n", addr);
+        }
+    }*/
+    vTaskDelay(pdMS_TO_TICKS(50));
+    uint8_t init_result = VL53L4CD_SensorInit(sensor);
+    if (init_result != 0)
+        printf("Sensor init failed %d\n", init_result);
     VL53L4CD_SetRangeTiming(sensor, 50, 0);
     if (VL53L4CD_StartRanging(sensor) != 0)
         printf("Start Ranging failed");
@@ -1379,6 +1409,8 @@ void app_main(void)
         coarse_indices[i] = i;
     }
 
+    enum op_modes {AUTO, MANUAL};
+    int op_mode = AUTO;
     while (1) {
         if (slam_restart) {
             slam_restart = false;
@@ -1387,8 +1419,8 @@ void app_main(void)
             iterations = 0;
             memset(map, 0, sizeof(map));
             draw_coarse_gridlines();
-            //SLAM_run();
-            manual_control();
+            SLAM_run();
+            //manual_control();
         }
         vTaskDelay(pdMS_TO_TICKS(100));
     };

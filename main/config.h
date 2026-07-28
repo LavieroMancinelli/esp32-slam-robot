@@ -20,8 +20,8 @@ static const char* TAG = "CarModule";
 #define DISTANCE_SIMILARITY_THRESHOLD 25 // landmarks must be within 10mm of their pair
 #define MIN_SENSOR_INTERVAL 0 // minimum ms between sensor readings
 #define MAP_SIZE 250 // 500x500 cm^2 map
-#define MAP_RATIO 15 // cell represents this number mm^2
-#define MOVE_TIME_PER_STEP 500 // 100 ms of wheel spinning inbetween slam steps
+#define MAP_RATIO 10 // cell represents this number mm^2
+#define MOVE_TIME_PER_STEP 500 // ms of wheel spinning inbetween slam steps
 #define MOVE_SPEED 25 // wheel turns at 25% power
 #define POINT_NEIGHBORHOOD_SIZE 1 // number of relevant points on each side of current point to calculate normal
 #define CORRESP_NORMAL_SIMILARITY 4 // normals of a corresponding point in old space to its pair in new space have to be at most this degrees apart
@@ -34,7 +34,7 @@ static const char* TAG = "CarModule";
 #define MAX_DIST_PER_STEP 20.0 // maximum distance robot (in mm) can move for each SLAM step
 #define DEADRECKON_T_WEIGHT 0.95 // weight of deadreckoning estimation vs icp in translation computation
 #define DEADRECKON_ROT_WEIGHT 0.0 // weight of deadreckoning estimation vs icp in rotation computation
-#define SENSOR_OFFSET_FROM_PIVOT 70.0 // mm distance between sensor and pivot point between rear wheels
+#define SENSOR_OFFSET_FROM_PIVOT 65.0 // mm distance between sensor and pivot point between rear wheels
 #define OPEN_INFLATION_CONST 8 // pathing will search through coarse cells that are this number of cells within an occupied coarse cell
 #define REACHED_DISTANCE 4 // pathing will mark this goal as reached and pick a new goal when within this distance (coarse cell units) of goal
 #endif
