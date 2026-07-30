@@ -751,18 +751,71 @@ RRT_node * next_RRT_node_in_path(RRT_node * root, double goal_pos[]) {
     return cur;    
 }
 
+
 typedef struct AStarNode {
     int i;
     double f; // g + h
     bool open;
+    int parent;
+    double g;
 } AStarNode;
 
-AStarNode create_A_star_node(int i, double f, bool open, int parent) {
-    AStarNode node;
-    node.i = i; 
-    node.f = f; 
-    node.open = open;
-    return node; 
+void swap(AStarNode ** a, AStarNode ** b) {
+    AStarNode * temp = *a;
+    *a = *b;
+    *b = temp;
+}
+
+void pq_enqueue(AStarNode ** pq, AStarNode * open, int node_i, double node_f, bool node_open, int node_parent, int node_g, int * pq_size, int pq_max_size) {
+    if (*pq_size >= pq_max_size) return; // full
+    
+    int i = *pq_size;
+    open[node_i].i = node_i;
+    open[node_i].f = node_f;
+    open[node_i].open = node_open;
+    open[node_i].parent = node_parent;
+    open[node_i].g = node_g;
+    pq[i] = &(open[node_i]);
+    ++(*pq_size);
+
+    // keep swapping with parent to shift up to correct position
+    while (i != 0 && (pq[(i-1)/2])->f > (pq[i])->f) {
+        swap(&pq[(i-1)/2], &pq[i]);
+        i = (i-1)/2;
+    }
+}
+
+void pq_heapify_down(AStarNode ** pq, int i, int * pq_size) {
+    int left = 2 * i;
+    int right = 2 * i + 1;
+    int smallest = i;
+
+    if (left <= *pq_size && pq[left]->f < pq[smallest]->f)
+        smallest = left;
+    
+    if (right <= *pq_size && pq[right]->f < pq[smallest]->f)
+        smallest = right;
+
+    if (smallest != i) {
+        swap(&pq[i], &pq[smallest]);
+        pq_heapify_down(pq, smallest, pq_size);
+    }
+}
+
+AStarNode * pq_pop(AStarNode ** pq, int * pq_size) {
+    if (*pq_size <= 0) return NULL; // underflow
+    if (*pq_size == 1) {
+        --(*pq_size);
+        return pq[0];
+    }
+
+    AStarNode * root = pq[0];
+    pq[0] = pq[*pq_size - 1];
+    --(*pq_size);
+
+    pq_heapify_down(pq, 0, pq_size);
+
+    return root;
 }
 
 double euclidean_flat_dist(double a_x, double a_y, double b_x, double b_y) {
@@ -789,24 +842,28 @@ bool next_coarse_path_node(double start_pos[], double goal_pos[], int cur_goal, 
     int coarse_goal = (goal_pos[2*cur_goal+1] / COARSE_RATIO) * coarse_map_width + (goal_pos[2*cur_goal+0] / COARSE_RATIO);
     int total_coarse_cells = coarse_map_width * coarse_map_width;
 
-    AStarNode * open = malloc(sizeof(AStarNode) * total_coarse_cells);
-    int * parent = malloc(sizeof(int) * total_coarse_cells);
-    double * g_score = malloc(sizeof(double) * total_coarse_cells);
+    int pq_size = 0;
+    AStarNode ** pq = malloc(sizeof(AStarNode *) * total_coarse_cells);
+    AStarNode * nodes = malloc(sizeof(AStarNode) * total_coarse_cells);
+    //int * parent = malloc(sizeof(int) * total_coarse_cells);
+    //double * g_score = malloc(sizeof(double) * total_coarse_cells);
     for (int i = 0; i < total_coarse_cells; ++i) {
-        open[i].open = false;
-        open[i].f = DBL_MAX;
-        open[i].i = i;
-
-        parent[i] = -1;
-        g_score[i] = DBL_MAX;
+        nodes[i].open = false;
+        nodes[i].f = DBL_MAX;
+        nodes[i].i = i;
+        nodes[i].parent = -1;
+        nodes[i].g = DBL_MAX;
+        //parent[i] = -1;
+        //g_score[i] = DBL_MAX;
     }
 
     int coarse_start = coarse_start_pos[1] * coarse_map_width + coarse_start_pos[0];
     for (int i = 0; i < 8; ++i) { // check if have reached any of the unreached goals
         if (goal_reached[i] && i == cur_goal) { // if this cur_goal already reached somehow, return early
-            free(open); 
-            free(g_score);
-            free(parent);
+            free(pq);
+            free(nodes); 
+            //free(g_score);
+            //free(parent);
             return true;
         }
         if (goal_reached[i] || i == cur_goal) continue;
@@ -816,13 +873,14 @@ bool next_coarse_path_node(double start_pos[], double goal_pos[], int cur_goal, 
         if (euclidean_flat_dist(goal_i_pos_x, goal_i_pos_y, coarse_goal_pos[0], coarse_goal_pos[1]) <= REACHED_DISTANCE) {
             goal_reached[i] = true;
         }
-
     }
+
     int coarse_start_dist_to_goal = euclidean_flat_dist(coarse_start_pos[0], coarse_start_pos[1], coarse_goal_pos[0], coarse_goal_pos[1]);
     if (coarse_start_dist_to_goal <= REACHED_DISTANCE) return true; // return true to signal to find a new goal
-    open[coarse_start].f = coarse_start_dist_to_goal;
-    open[coarse_start].open = true;
-    g_score[coarse_start] = 0.0;
+    pq_enqueue(pq, nodes, coarse_start, coarse_start_dist_to_goal, true, -1, 0.0, &pq_size, total_coarse_cells);
+    //pq[coarse_start].f = coarse_start_dist_to_goal;
+    //open[coarse_start].open = true;
+    //g_score[coarse_start] = 0.0;
 
     int closest_to_goal = 0;
     double closest_to_goal_dist = DBL_MAX;
@@ -830,19 +888,21 @@ bool next_coarse_path_node(double start_pos[], double goal_pos[], int cur_goal, 
     bool goal_found = false;
 
     while (true) {
-        int cur = find_min_f(open, total_coarse_cells);
-        int cur_y = cur / coarse_map_width, cur_x = cur % coarse_map_width; 
+        //int cur = find_min_f(open, total_coarse_cells);
+        AStarNode * cur = pq_pop(pq, &pq_size);
+        int cur_y = cur->i / coarse_map_width, cur_x = cur->i % coarse_map_width; 
 
         int cur_direct_dist_to_goal = euclidean_flat_dist(cur_x, cur_y, coarse_goal_pos[0], coarse_goal_pos[1]); // save closest cell by euclidean distance to goal for fail condition
         if (cur_direct_dist_to_goal < closest_to_goal_dist) {
-            closest_to_goal = cur;
+            closest_to_goal = cur->i;
             closest_to_goal_dist = cur_direct_dist_to_goal;
         }        
 
-        if (!open[cur].open) break; // no open nodes left
-        open[cur].open = false;
+        if (!cur->open) break; // no open nodes left
+        cur->open = false;
+        //nodes[cur->i].open = false;
 
-        if (cur == coarse_goal) { // found goal
+        if (cur->i == coarse_goal) { // found goal
             goal_found = true;
             break;
         }
@@ -852,22 +912,23 @@ bool next_coarse_path_node(double start_pos[], double goal_pos[], int cur_goal, 
                 if (i == 0 && j == 0) continue; // skip self
                 int neighbor_y = cur_y + i, neighbor_x = cur_x + j;
                 if (neighbor_y < 0 || neighbor_x < 0 || neighbor_y >= coarse_map_width || neighbor_x >= coarse_map_width || coarse_map[neighbor_y][neighbor_x] || !coarse_map_open[neighbor_y][neighbor_x])
-                    continue; // skip if neighbor (or polar neighbor to it) OOB or obstacle or too far from a known obstacle
-                // || coarse_map[neighbor_y-1][neighbor_x] || coarse_map[neighbor_y+1][neighbor_x] || coarse_map[neighbor_y][neighbor_x-1] || coarse_map[neighbor_y][neighbor_x+1]
+                    continue; // skip if neighbor is OOB or obstacle or too far from a known obstacle
                 int neighbor = neighbor_y * coarse_map_width + neighbor_x;
-                if (!open[neighbor].open && open[neighbor].f != DBL_MAX) continue; // neighbor already closed
+                if (!nodes[neighbor].open && nodes[neighbor].f != DBL_MAX) continue; // neighbor already closed
                 
                 double direct_neighbor_cost = (i != 0 && j != 0) ? 1.414214 : 1.0; // if on diagonal cost is sqrt(2) otherwise 1
-                double g = g_score[cur] + direct_neighbor_cost;
-                if (g < g_score[neighbor]) {
-                    g_score[neighbor] = g;
-                    open[neighbor].f = g + euclidean_flat_dist(neighbor_x, neighbor_y, coarse_goal_pos[0], coarse_goal_pos[1]);
-                    open[neighbor].open = true;
-                    parent[neighbor] = cur;
+                double g = cur->g + direct_neighbor_cost; // g_score[cur->i]
+                if (g < nodes[neighbor].g) {
+                    //g_score[neighbor] = g;
+                    pq_enqueue(pq, nodes, neighbor, g + euclidean_flat_dist(neighbor_x, neighbor_y, coarse_goal_pos[0], coarse_goal_pos[1]), true, cur->i, g, &pq_size, total_coarse_cells);
+                    //open[neighbor].f = g + euclidean_flat_dist(neighbor_x, neighbor_y, coarse_goal_pos[0], coarse_goal_pos[1]);
+                    //open[neighbor].open = true;
+                    //parent[neighbor] = cur;
                 }
             }
         }
     }
+
 
     int cur = coarse_goal;  // if the goal was reached, trace path from goal, 
     if (!goal_found) {      // otherwise, update goal_pos to closest by euclidean reached cell to goal and trace path from that
@@ -879,9 +940,9 @@ bool next_coarse_path_node(double start_pos[], double goal_pos[], int cur_goal, 
         //goal_pos[2*cur_goal+1] = new_goal_y;
     }
     int next = cur;
-    while (parent[cur] != -1 && parent[parent[cur]] != -1) {    // trace path to 2nd after start
+    while (nodes[cur].parent != -1 && nodes[nodes[cur].parent].parent != -1) {    // trace path to 2nd after start     parent[cur] != -1 && parent[parent[cur]] != -1
         next = cur;
-        cur = parent[cur];
+        cur = nodes[cur].parent; //parent[cur];
 
         // draw each node in path on map
         int node_center_x = (next % coarse_map_width) * COARSE_RATIO + COARSE_RATIO / 2;
@@ -891,9 +952,10 @@ bool next_coarse_path_node(double start_pos[], double goal_pos[], int cur_goal, 
     next_coarse_pos[0] = next % coarse_map_width; // x
     next_coarse_pos[1] = next / coarse_map_width; // y
 
-    free(open); 
-    free(g_score);
-    free(parent);
+    free(pq); 
+    free(nodes);
+    //free(g_score);
+    //free(parent);
     return false;
 }
 
