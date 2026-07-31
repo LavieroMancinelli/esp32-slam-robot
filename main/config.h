@@ -22,7 +22,7 @@ static const char* TAG = "CarModule";
 #define MAP_SIZE 250 // 500x500 cm^2 map
 #define MAP_RATIO 10 // cell represents this number mm^2
 #define MOVE_TIME_PER_STEP 500 // ms of wheel spinning inbetween slam steps
-#define MOVE_SPEED 25 // wheel turns at 25% power
+#define MOVE_SPEED 35 // wheel turns at 25% power
 #define POINT_NEIGHBORHOOD_SIZE 1 // number of relevant points on each side of current point to calculate normal
 #define CORRESP_NORMAL_SIMILARITY 4 // normals of a corresponding point in old space to its pair in new space have to be at most this degrees apart
 #define MAX_DISTANCE_PER_ITERATION 175 // maximum distance (mm) a corresponding point can be apart from its pair
@@ -31,7 +31,7 @@ static const char* TAG = "CarModule";
 #define COARSE_RATIO 5 // each coarse occupancy grid cell represents this many normal map cells squared
 #define PLANNING_ROTATION_TOLERANCE 5.0 // if rotation at least this similar to edge then drive straight
 #define MAX_ROT_PER_STEP 15.0 // rotate maximum of this number of degrees for each SLAM step
-#define MAX_DIST_PER_STEP 20.0 // maximum distance robot (in mm) can move for each SLAM step
+#define MAX_DIST_PER_STEP 35.0 // maximum distance robot (in mm) can move for each SLAM step
 #define DEADRECKON_T_WEIGHT 0.95 // weight of deadreckoning estimation vs icp in translation computation
 #define DEADRECKON_ROT_WEIGHT 0.0 // weight of deadreckoning estimation vs icp in rotation computation
 #define SENSOR_OFFSET_FROM_PIVOT 65.0 // mm distance between sensor and pivot point between rear wheels

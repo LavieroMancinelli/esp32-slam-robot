@@ -617,7 +617,7 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
         compute_correspondence_pairs(local_points_x_y, SENSOR_FREQ, prev->points_x_y, points_normals_x_y, old_points_normals_x_y, corresp_points_x_y, prev_rot, dr_estim_x, dr_estim_y, &num_pairs, &num_outliers, combined_x_y_and_pair_dists);
         double dr_tmd = compute_tmd_point_to_point(local_points_x_y, corresp_points_x_y, points_normals_x_y, SENSOR_FREQ, num_pairs, num_outliers);
         printf("tmd found dr %f icp %f\n", dr_tmd, best_tmd);
-        if (best_tmd > dr_tmd * 0.95) {// use dead reckoning rot instead if its tmd was better than the rot found by ICP
+        if (best_tmd > dr_tmd * 1.0) {// use dead reckoning rot instead if its tmd was better than the rot found by ICP
             optimal_rot = prev_rot;
             printf("chose dr rot (%f) instead of icp rot (%f) because its tmd was better (%f vs %f)\n", prev_rot, optimal_rot, dr_tmd, best_tmd);
         }
@@ -718,6 +718,8 @@ void motor_rotate(double rot_needed) { // rotate rot_needed degrees
     rot_needed = fabs(rot_needed) <= MAX_ROT_PER_STEP ? rot_needed : (rot_needed > 0 ? MAX_ROT_PER_STEP : -MAX_ROT_PER_STEP);
     prev_rot = rot_needed; // dead reckoning (rotation)
 
+    double coeff = 84.43506 / pow(fabs(rot_needed), 0.02) + -69.98076;
+
     if (rot_needed < 0) {
         changeSpeedA(0, MOVE_SPEED);
         changeSpeedB(1, MOVE_SPEED);
@@ -725,7 +727,7 @@ void motor_rotate(double rot_needed) { // rotate rot_needed degrees
         changeSpeedA(1, MOVE_SPEED);
         changeSpeedB(0, MOVE_SPEED);
     }
-    vTaskDelay(pdMS_TO_TICKS(14.2 * fabs(rot_needed))); // 18.8 24.4
+    vTaskDelay(pdMS_TO_TICKS(coeff * fabs(rot_needed))); // 18.8 24.4    14.2
     changeSpeedA(0, 0);
     changeSpeedB(0, 0);
 }
@@ -734,9 +736,12 @@ void motor_straight(double dist_needed) { // move dist_needed mm bounded by MAX_
     dist_needed = dist_needed <= MAX_DIST_PER_STEP ? dist_needed : MAX_DIST_PER_STEP;
     prev_move = dist_needed; // for dead reckoning
 
+    double coeff = 69.65524 / pow(dist_needed, 0.02) + -53.51863; // variable coefficient based on MOVE_SPEED 35
+    //double coeff = -0.0532563 * dist_needed + 13.55715;
+
     changeSpeedA(0, MOVE_SPEED);
     changeSpeedB(0, MOVE_SPEED);
-    vTaskDelay(pdMS_TO_TICKS(13.5 * dist_needed)); // coefficient based on MOVE_SPEED 25  21.4
+    vTaskDelay(pdMS_TO_TICKS(coeff * dist_needed)); 
     changeSpeedA(0, 0);
     changeSpeedB(0, 0);
 }
@@ -1339,15 +1344,15 @@ void manual_control() {
             break;
         }
         if (manual_left) {
-            motor_rotate(-20.0);
+            motor_rotate(-360.0);
             manual_left = false;
         }
         if (manual_right) {
-            motor_rotate(20.0);
+            motor_rotate(360.0);
             manual_right = false;
         }
         if (manual_forward) {
-            motor_straight(20.0);
+            motor_straight(200.0);
             manual_forward = false;
         }
         prev = SLAM_iteration(prev, global_trans, &global_rot);
@@ -1481,8 +1486,8 @@ void app_main(void)
             iterations = 0;
             memset(map, 0, sizeof(map));
             draw_coarse_gridlines();
-            SLAM_run();
-            //manual_control();
+            //SLAM_run();
+            manual_control();
         }
         vTaskDelay(pdMS_TO_TICKS(100));
     };
