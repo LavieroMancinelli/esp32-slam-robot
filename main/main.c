@@ -404,6 +404,8 @@ void compute_correspondence_pairs(double points_x_y[], size_t points_len, double
             } else {
                 ++(*num_outliers);
             }
+        } else {
+            ++(*num_outliers);
         }
     }
 }
@@ -464,15 +466,12 @@ double compute_tmd_point_to_point(double points_x_y[], double corresp_points_x_y
     if (num_pairs + num_outliers == 0) return DBL_MAX; // safety against div by 0
 
     double sum_squared_residuals = 0.0;
-    //int count = 0;
     double total_weight = 0.0;
-    for (size_t i = 0; i < points_len; ++i) { // TO DO: ADD COS WEIGHTING HERE, MAYBE PARALLEL PROBLEM IS CAUSING POOR MATCHES
+    for (size_t i = 0; i < points_len; ++i) {
         if (points_x_y[2*i] == 0.0 || corresp_points_x_y[2*i] == 0.0) continue; // invalid point or corresp_point
         
         double dx = corresp_points_x_y[2*i] - points_x_y[2*i];
         double dy = corresp_points_x_y[2*i+1] - points_x_y[2*i+1];
-        //sum_squared_residuals += pow(dx, 2) + pow(dy, 2);
-        //++count;
 
         
         // weight by incident angle to direction of car
@@ -487,14 +486,14 @@ double compute_tmd_point_to_point(double points_x_y[], double corresp_points_x_y
         double ray_alignment = fabs(points_normals_x_y[2*i] * ray_x + points_normals_x_y[2*i+1] * ray_y);
         double weight = 1.0; //0.5*pow(ray_alignment, 5);// + 1.0*pow(forward_alignment, 1);
         //double weight = pow(cos(scan_angle * M_PI/180), 6); // weight by angle: 1 at center, 0 at edges
-        if (weight <= 0.0) continue;
+        //if (weight <= 0.0) continue;
         
         total_weight += weight;
-        sum_squared_residuals += weight * pow(dx, 2) + weight * pow(dy, 2);
+        sum_squared_residuals += weight * pow(dx, 2) + pow(dy, 2);
     }
     //printf("total weight %f\n", total_weight);
 
-    return 1.0 / (total_weight + num_outliers) * (sum_squared_residuals + num_outliers * pow(MAX_DISTANCE_PER_ITERATION, 2));
+    return 1.0 / (total_weight + num_outliers) * (sum_squared_residuals + num_outliers * pow(MAX_DISTANCE_PER_ITERATION, 3));
 }
 
 typedef struct RangeScanNode {
@@ -560,7 +559,7 @@ double gs_search_for_angle(double gs_lower_bound, double gs_upper_bound, double 
     double estim_y = (SENSOR_OFFSET_FROM_PIVOT * -cos(g_rot*M_PI/180.0)) + (SENSOR_OFFSET_FROM_PIVOT + prev_move) * cos((g_rot + *optimal_rot)*M_PI/180.0);
     compute_correspondence_pairs(local_points_x_y, SENSOR_FREQ, prev_points_x_y, points_normals_x_y, old_points_normals_x_y, corresp_points_x_y, *optimal_rot, estim_x, estim_y, &num_pairs, &num_outliers, combined_x_y_and_pair_dists);
     //return compute_total_matching_distance(local_points_x_y, corresp_points_x_y, SENSOR_FREQ, num_pairs, num_outliers, combined_x_y_and_pair_dists, &delta_Tx_2, &delta_Ty_2);
-    return compute_tmd_point_to_point(local_points_x_y, corresp_points_x_y, points_normals_x_y, SENSOR_FREQ, num_pairs, num_outliers);;
+    return compute_tmd_point_to_point(local_points_x_y, corresp_points_x_y, points_normals_x_y, SENSOR_FREQ, num_pairs, num_outliers);
 }
 
 RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * g_rot) {
@@ -584,8 +583,8 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
         // use multi-hypothesis to find best angle to center golden section search around
         double best_tmd = DBL_MAX;
         double best_rot = 0.0;
-        int num_coarse = 21;  // try this many angles between evenly spaced among prev_rot +- search_half_width
-        double search_half_width = 5.0;
+        int num_coarse = 11;  // try this many angles between evenly spaced among prev_rot +- search_half_width
+        double search_half_width = 15.0;
         double delta_Tx_tmp = 0, delta_Ty_tmp = 0;
         for (int s = 0; s < num_coarse; ++s) {
             double test_rot = (prev_rot - search_half_width) + s * (2*search_half_width / (num_coarse - 1));
@@ -597,7 +596,7 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
             double estim_y = (SENSOR_OFFSET_FROM_PIVOT * -cos((*g_rot)*M_PI/180.0)) + (SENSOR_OFFSET_FROM_PIVOT + prev_move) * cos(((*g_rot) + test_rot)*M_PI/180.0);
             compute_correspondence_pairs(local_points_x_y, SENSOR_FREQ, prev->points_x_y, points_normals_x_y, old_points_normals_x_y, corresp_points_x_y, test_rot, estim_x, estim_y, &num_pairs, &num_outliers, combined_x_y_and_pair_dists);
             double tmd = compute_tmd_point_to_point(local_points_x_y, corresp_points_x_y, points_normals_x_y, SENSOR_FREQ, num_pairs, num_outliers);
-            //double tmd = compute_total_matching_distance(local_points_x_y, corresp_points_x_y, SENSOR_FREQ, num_pairs, num_outliers, combined_x_y_and_pair_dists, &delta_Tx_tmp, &delta_Ty_tmp);
+            printf("s: %d, tmd: %f, num_outliers: %d\n", s, tmd, num_outliers);
             if (tmd < best_tmd) {
                 best_tmd = tmd;
                 best_rot = test_rot;
@@ -605,7 +604,7 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
         }
 
         // golden section search to find ω that minimizes total_matching_distance
-        double refine_range = 10.0;  // search +- these degrees around best coarse angle
+        double refine_range = 3.0;  // search +- these degrees around best coarse angle
         double optimal_rot = 0.0;
         gs_search_for_angle(best_rot - refine_range, best_rot + refine_range, &optimal_rot, *g_rot, local_points_x_y, prev->points_x_y, points_normals_x_y, old_points_normals_x_y, corresp_points_x_y, combined_x_y_and_pair_dists);
         optimal_rot = optimal_rot * (1-DEADRECKON_ROT_WEIGHT) + prev_rot * (DEADRECKON_ROT_WEIGHT);
@@ -617,7 +616,7 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
         compute_correspondence_pairs(local_points_x_y, SENSOR_FREQ, prev->points_x_y, points_normals_x_y, old_points_normals_x_y, corresp_points_x_y, prev_rot, dr_estim_x, dr_estim_y, &num_pairs, &num_outliers, combined_x_y_and_pair_dists);
         double dr_tmd = compute_tmd_point_to_point(local_points_x_y, corresp_points_x_y, points_normals_x_y, SENSOR_FREQ, num_pairs, num_outliers);
         printf("tmd found dr %f icp %f\n", dr_tmd, best_tmd);
-        if (best_tmd > dr_tmd * 1.0) {// use dead reckoning rot instead if its tmd was better than the rot found by ICP
+        if (best_tmd > dr_tmd * 0.90) {// use dead reckoning rot instead if its tmd was better than the rot found by ICP
             optimal_rot = prev_rot;
             printf("chose dr rot (%f) instead of icp rot (%f) because its tmd was better (%f vs %f)\n", prev_rot, optimal_rot, dr_tmd, best_tmd);
         }
@@ -718,16 +717,16 @@ void motor_rotate(double rot_needed) { // rotate rot_needed degrees
     rot_needed = fabs(rot_needed) <= MAX_ROT_PER_STEP ? rot_needed : (rot_needed > 0 ? MAX_ROT_PER_STEP : -MAX_ROT_PER_STEP);
     prev_rot = rot_needed; // dead reckoning (rotation)
 
-    double coeff = 84.43506 / pow(fabs(rot_needed), 0.02) + -69.98076;
+    //double coeff = 84.43506 / pow(fabs(rot_needed), 0.02) + -69.98076;
 
     if (rot_needed < 0) {
-        changeSpeedA(0, MOVE_SPEED);
-        changeSpeedB(1, MOVE_SPEED);
+        changeSpeedA(0, MOVE_ROTATE_SPEED);
+        changeSpeedB(1, MOVE_ROTATE_SPEED);
     } else {
-        changeSpeedA(1, MOVE_SPEED);
-        changeSpeedB(0, MOVE_SPEED);
+        changeSpeedA(1, MOVE_ROTATE_SPEED);
+        changeSpeedB(0, MOVE_ROTATE_SPEED);
     }
-    vTaskDelay(pdMS_TO_TICKS(coeff * fabs(rot_needed))); // 18.8 24.4    14.2
+    vTaskDelay(pdMS_TO_TICKS(24.0 * fabs(rot_needed))); // 18.8 24.4    14.2 24.0
     changeSpeedA(0, 0);
     changeSpeedB(0, 0);
 }
@@ -739,8 +738,8 @@ void motor_straight(double dist_needed) { // move dist_needed mm bounded by MAX_
     double coeff = 69.65524 / pow(dist_needed, 0.02) + -53.51863; // variable coefficient based on MOVE_SPEED 35
     //double coeff = -0.0532563 * dist_needed + 13.55715;
 
-    changeSpeedA(0, MOVE_SPEED);
-    changeSpeedB(0, MOVE_SPEED);
+    changeSpeedA(0, MOVE_STRAIGHT_SPEED);
+    changeSpeedB(0, MOVE_STRAIGHT_SPEED);
     vTaskDelay(pdMS_TO_TICKS(coeff * dist_needed)); 
     changeSpeedA(0, 0);
     changeSpeedB(0, 0);
@@ -850,16 +849,13 @@ bool next_coarse_path_node(double start_pos[], double goal_pos[], int cur_goal, 
     int pq_size = 0;
     AStarNode ** pq = malloc(sizeof(AStarNode *) * total_coarse_cells);
     AStarNode * nodes = malloc(sizeof(AStarNode) * total_coarse_cells);
-    //int * parent = malloc(sizeof(int) * total_coarse_cells);
-    //double * g_score = malloc(sizeof(double) * total_coarse_cells);
+
     for (int i = 0; i < total_coarse_cells; ++i) {
         nodes[i].open = false;
         nodes[i].f = DBL_MAX;
         nodes[i].i = i;
         nodes[i].parent = -1;
         nodes[i].g = DBL_MAX;
-        //parent[i] = -1;
-        //g_score[i] = DBL_MAX;
     }
 
     int coarse_start = coarse_start_pos[1] * coarse_map_width + coarse_start_pos[0];
@@ -867,8 +863,7 @@ bool next_coarse_path_node(double start_pos[], double goal_pos[], int cur_goal, 
         if (goal_reached[i] && i == cur_goal) { // if this cur_goal already reached somehow, return early
             free(pq);
             free(nodes); 
-            //free(g_score);
-            //free(parent);
+            printf("REACHED GOAL\n");
             return true;
         }
         if (goal_reached[i] || i == cur_goal) continue;
@@ -883,9 +878,6 @@ bool next_coarse_path_node(double start_pos[], double goal_pos[], int cur_goal, 
     int coarse_start_dist_to_goal = euclidean_flat_dist(coarse_start_pos[0], coarse_start_pos[1], coarse_goal_pos[0], coarse_goal_pos[1]);
     if (coarse_start_dist_to_goal <= REACHED_DISTANCE) return true; // return true to signal to find a new goal
     pq_enqueue(pq, nodes, coarse_start, coarse_start_dist_to_goal, true, -1, 0.0, &pq_size, total_coarse_cells);
-    //pq[coarse_start].f = coarse_start_dist_to_goal;
-    //open[coarse_start].open = true;
-    //g_score[coarse_start] = 0.0;
 
     int closest_to_goal = 0;
     double closest_to_goal_dist = DBL_MAX;
@@ -895,6 +887,7 @@ bool next_coarse_path_node(double start_pos[], double goal_pos[], int cur_goal, 
     while (true) {
         //int cur = find_min_f(open, total_coarse_cells);
         AStarNode * cur = pq_pop(pq, &pq_size);
+        if (cur == NULL) break; // break if queue empty
         int cur_y = cur->i / coarse_map_width, cur_x = cur->i % coarse_map_width; 
 
         int cur_direct_dist_to_goal = euclidean_flat_dist(cur_x, cur_y, coarse_goal_pos[0], coarse_goal_pos[1]); // save closest cell by euclidean distance to goal for fail condition
@@ -903,7 +896,7 @@ bool next_coarse_path_node(double start_pos[], double goal_pos[], int cur_goal, 
             closest_to_goal_dist = cur_direct_dist_to_goal;
         }        
 
-        if (!cur->open) break; // no open nodes left
+        if (!cur->open) continue; // no open nodes left
         cur->open = false;
         //nodes[cur->i].open = false;
 
@@ -924,7 +917,6 @@ bool next_coarse_path_node(double start_pos[], double goal_pos[], int cur_goal, 
                 double direct_neighbor_cost = (i != 0 && j != 0) ? 1.414214 : 1.0; // if on diagonal cost is sqrt(2) otherwise 1
                 double g = cur->g + direct_neighbor_cost; // g_score[cur->i]
                 if (g < nodes[neighbor].g) {
-                    //g_score[neighbor] = g;
                     pq_enqueue(pq, nodes, neighbor, g + euclidean_flat_dist(neighbor_x, neighbor_y, coarse_goal_pos[0], coarse_goal_pos[1]), true, cur->i, g, &pq_size, total_coarse_cells);
                     //open[neighbor].f = g + euclidean_flat_dist(neighbor_x, neighbor_y, coarse_goal_pos[0], coarse_goal_pos[1]);
                     //open[neighbor].open = true;
@@ -947,7 +939,7 @@ bool next_coarse_path_node(double start_pos[], double goal_pos[], int cur_goal, 
     int next = cur;
     while (nodes[cur].parent != -1 && nodes[nodes[cur].parent].parent != -1) {    // trace path to 2nd after start     parent[cur] != -1 && parent[parent[cur]] != -1
         next = cur;
-        cur = nodes[cur].parent; //parent[cur];
+        cur = nodes[cur].parent;
 
         // draw each node in path on map
         int node_center_x = (next % coarse_map_width) * COARSE_RATIO + COARSE_RATIO / 2;
@@ -959,8 +951,6 @@ bool next_coarse_path_node(double start_pos[], double goal_pos[], int cur_goal, 
 
     free(pq); 
     free(nodes);
-    //free(g_score);
-    //free(parent);
     return false;
 }
 
@@ -971,16 +961,9 @@ void SLAM_run() {
     double global_rot = 0;
     double goals[16] = {125,60, 190,60, 190,125, 190,190, 125,190, 60,190, 60,125, 60,60}; // ^, ^>, >, v>, v, <v, <, <^
     bool goal_reached[8] = {false, false, false, false, false, false, false, false};
-    //double goal_pos[2] = {125, 60}; // temporary hardcoded goal
     int cur_goal = 0;
 
-    // generate rand values to be reused to improve RRT generation consistency
-    //srand(10);
-    //for (size_t i = 0; i < max_coarse_index_length; ++i)
-    //    random_values[i] = rand();
     
-    // first PLANNING rrt from cur position, if rotation to next edge point is within range
-    // then MOVING, otherwise ROTATING until it is, then MOVING for one step
     enum {PLANNING, ROTATING, MOVING};
     int state = PLANNING;
     int next_coarse_pos[2] = {};
@@ -996,20 +979,7 @@ void SLAM_run() {
         if (state == PLANNING) {
             memcpy(map_tree, map, sizeof(uint8_t) * MAP_SIZE * MAP_SIZE);
             double cur_map_pos[2] = {-(global_trans[0] / MAP_RATIO) + MAP_SIZE / 2, -(global_trans[1] / MAP_RATIO) + MAP_SIZE / 2};
-            //double goal_map_pos[2] = {goals[2*cur_goal+1], goals[2*cur_goal+0]};
-
-            /*
-            RRT_node * RRT_root = compute_RRT(cur_map_pos);
-            draw_RRT_on_map(RRT_root);
-
-            // find path in RRT
-            RRT_node * next_node = next_RRT_node_in_path(RRT_root, goal_pos);
-            next_world_pos[0] = -(next_node->x - MAP_SIZE / 2) * MAP_RATIO;
-            next_world_pos[1] = -(next_node->y - MAP_SIZE / 2) * MAP_RATIO;
-            printf("root: %d,%d next: %d,%d\n", RRT_root->x, RRT_root->y, next_node->x, next_node->y);
-            map_tree[(int)goal_pos[1]][(int)goal_pos[0]] = 253;     // draw goal on map
-            map_tree[(int)next_node->y][(int)next_node->x] = 254;   // draw next node endpoint on map
-            */
+            
 
             // find next node in BFS on coarse_map
             if (next_coarse_path_node(cur_map_pos, goals, cur_goal, goal_reached, next_coarse_pos)) { // true means the robot is at the goal, so switch goal to the next one
@@ -1018,8 +988,6 @@ void SLAM_run() {
                 if (cur_goal >= 8) return; // all the goals have been reached
                 next_coarse_path_node(cur_map_pos, goals, cur_goal, goal_reached, next_coarse_pos); // replan path again because goal has been updated
             }   
-            //int map_cell_center_x = next_coarse_pos[0] * COARSE_RATIO + COARSE_RATIO / 2;
-            //int map_cell_center_y = next_coarse_pos[1] * COARSE_RATIO + COARSE_RATIO / 2;
             int map_cell_center_x = next_coarse_pos[0] * COARSE_RATIO + 1 + (COARSE_RATIO - 1) / 2;
             int map_cell_center_y = next_coarse_pos[1] * COARSE_RATIO + 1 + (COARSE_RATIO - 1) / 2;
             next_world_pos[0] = -(map_cell_center_y - MAP_SIZE / 2) * MAP_RATIO;
@@ -1052,8 +1020,6 @@ void SLAM_run() {
             } else {
                 state = MOVING;
             }
-
-            //free_RRT(RRT_root);
         } 
         
         if (state == ROTATING) {
@@ -1072,7 +1038,6 @@ void SLAM_run() {
             motor_straight(target_dist);
             state = PLANNING;
         }
-
     }
 }
 
@@ -1486,6 +1451,12 @@ void app_main(void)
             iterations = 0;
             memset(map, 0, sizeof(map));
             draw_coarse_gridlines();
+
+            gpio_set_level(GPIO_NUM_20, 0); // xshut pin on sensor
+            vTaskDelay(pdMS_TO_TICKS(10));
+            gpio_set_level(GPIO_NUM_20, 1);
+            vTaskDelay(pdMS_TO_TICKS(10));
+
             //SLAM_run();
             manual_control();
         }
