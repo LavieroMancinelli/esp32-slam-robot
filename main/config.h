@@ -20,7 +20,7 @@ static const char* TAG = "CarModule";
 #define DISTANCE_SIMILARITY_THRESHOLD 25 // landmarks must be within 10mm of their pair
 #define MIN_SENSOR_INTERVAL 0 // minimum ms between sensor readings
 #define MAP_SIZE 250 // 500x500 cm^2 map
-#define MAP_RATIO 20 // cell represents this number mm^2
+#define MAP_RATIO 25 // cell represents this number mm^2
 #define MOVE_TIME_PER_STEP 500 // ms of wheel spinning inbetween slam steps
 #define MOVE_STRAIGHT_SPEED 35 // wheel turns at 25% power
 #define MOVE_ROTATE_SPEED 20 // wheel turns at 25% power
@@ -38,4 +38,5 @@ static const char* TAG = "CarModule";
 #define SENSOR_OFFSET_FROM_PIVOT 120.0 // mm distance between sensor and pivot point between rear wheels
 #define OPEN_INFLATION_CONST 3 // pathing will search through coarse cells that are this number of cells within an occupied coarse cell
 #define REACHED_DISTANCE 2 // pathing will mark this goal as reached and pick a new goal when within this distance (coarse cell units) of goal
+#define SWAP_GOALS_THRESHOLD 10.0 // euclidean distance in coarse cells that the current goal must be apart from the current position for a closer goal to be swapped to
 #endif

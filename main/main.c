@@ -21,6 +21,7 @@ uint8_t map_tree[MAP_SIZE][MAP_SIZE] = {0};
 bool coarse_map[MAP_SIZE / COARSE_RATIO][MAP_SIZE / COARSE_RATIO] = {false};
 bool coarse_map_open[MAP_SIZE / COARSE_RATIO][MAP_SIZE / COARSE_RATIO] = {false};
 bool coarse_tree_map[MAP_SIZE / COARSE_RATIO][MAP_SIZE / COARSE_RATIO] = {false};
+bool coarse_corner_map[MAP_SIZE / COARSE_RATIO][MAP_SIZE / COARSE_RATIO] = {false};
 int coarse_indices[(MAP_SIZE / COARSE_RATIO) * (MAP_SIZE / COARSE_RATIO)];
 double prev_move = 0.0, prev_rot = 0.0;
 
@@ -44,6 +45,8 @@ void free_RRT(RRT_node *);
 RRT_node * find_nearest_RRT_node(RRT_node *, int, int);
 void fill_coarse_map();
 void get_normal_from_tangent(double *, double *, double *, int, int, int);
+bool bresenhams_line(int, int);
+double euclidean_flat_dist(double, double, double, double);
 
 
 RRT_node * RRT_traversal_queue[MAXIMUM_RRT_ITERATIONS] = {NULL};
@@ -172,9 +175,9 @@ void collect_range_scan(uint16_t points[], int freq, int dur) {
     } 
 
     // discard outliers based on distance disconinuities
-    i = 1;
+    i = 2;
     while (i < freq) {
-        if (i < freq-1 && points[i-1] == 0 && points[i+1] == 0) // no neighbors
+        if (i < freq-2 && points[i-1] == 0 && points[i+1] == 0 && points[i-2] == 0 && points[i+2] == 0) // no neighbors
             points[i] = 0;
         if (points[i-1] != 0 && abs(points[i] - points[i-1]) >= SPIKE_THRESHOLD) // dist to last
             points[i-1] = 0;
@@ -616,7 +619,7 @@ RangeScanNode * SLAM_iteration(RangeScanNode * prev, double g_trans[], double * 
         compute_correspondence_pairs(local_points_x_y, SENSOR_FREQ, prev->points_x_y, points_normals_x_y, old_points_normals_x_y, corresp_points_x_y, prev_rot, dr_estim_x, dr_estim_y, &num_pairs, &num_outliers, combined_x_y_and_pair_dists);
         double dr_tmd = compute_tmd_point_to_point(local_points_x_y, corresp_points_x_y, points_normals_x_y, SENSOR_FREQ, num_pairs, num_outliers);
         printf("tmd found dr %f icp %f\n", dr_tmd, best_tmd);
-        if (best_tmd > dr_tmd * 0.90) {// use dead reckoning rot instead if its tmd was better than the rot found by ICP
+        if (best_tmd > dr_tmd) {// use dead reckoning rot instead if its tmd was better than the rot found by ICP
             optimal_rot = prev_rot;
             printf("chose dr rot (%f) instead of icp rot (%f) because its tmd was better (%f vs %f)\n", prev_rot, optimal_rot, dr_tmd, best_tmd);
         }
@@ -717,6 +720,7 @@ void motor_rotate(double rot_needed) { // rotate rot_needed degrees
     rot_needed = fabs(rot_needed) <= MAX_ROT_PER_STEP ? rot_needed : (rot_needed > 0 ? MAX_ROT_PER_STEP : -MAX_ROT_PER_STEP);
     prev_rot = rot_needed; // dead reckoning (rotation)
 
+    double coeff = fabs(rot_needed) >= 30 ? 24.0 : -0.131139 * fabs(rot_needed) + 28.1038;
     //double coeff = 84.43506 / pow(fabs(rot_needed), 0.02) + -69.98076;
 
     if (rot_needed < 0) {
@@ -726,7 +730,7 @@ void motor_rotate(double rot_needed) { // rotate rot_needed degrees
         changeSpeedA(1, MOVE_ROTATE_SPEED);
         changeSpeedB(0, MOVE_ROTATE_SPEED);
     }
-    vTaskDelay(pdMS_TO_TICKS(24.0 * fabs(rot_needed))); // 18.8 24.4    14.2 24.0
+    vTaskDelay(pdMS_TO_TICKS(coeff * fabs(rot_needed))); // 18.8 24.4    14.2 24.0
     changeSpeedA(0, 0);
     changeSpeedB(0, 0);
 }
@@ -735,7 +739,7 @@ void motor_straight(double dist_needed) { // move dist_needed mm bounded by MAX_
     dist_needed = dist_needed <= MAX_DIST_PER_STEP ? dist_needed : MAX_DIST_PER_STEP;
     prev_move = dist_needed; // for dead reckoning
 
-    double coeff = 69.65524 / pow(dist_needed, 0.02) + -53.51863; // variable coefficient based on MOVE_SPEED 35
+    double coeff = dist_needed >= 75.0 ? 10.2 : 69.65524 / pow(dist_needed, 0.02) + -53.51863; // variable coefficient based on MOVE_SPEED 35
     //double coeff = -0.0532563 * dist_needed + 13.55715;
 
     changeSpeedA(0, MOVE_STRAIGHT_SPEED);
@@ -755,7 +759,6 @@ RRT_node * next_RRT_node_in_path(RRT_node * root, double goal_pos[]) {
     return cur;    
 }
 
-
 typedef struct AStarNode {
     int i;
     double f; // g + h
@@ -771,6 +774,7 @@ void swap(AStarNode ** a, AStarNode ** b) {
 }
 
 void pq_enqueue(AStarNode ** pq, AStarNode * open, int node_i, double node_f, bool node_open, int node_parent, int node_g, int * pq_size, int pq_max_size) {
+    if (node_i < 0 || node_i >= pq_max_size) return; // oob
     if (*pq_size >= pq_max_size) return; // full
     
     int i = *pq_size;
@@ -822,6 +826,54 @@ AStarNode * pq_pop(AStarNode ** pq, int * pq_size) {
     return root;
 }
 
+void stack_push(int * stack, int * stack_len, int stack_max_len, int item) {
+    if (*stack_len >= stack_max_len) return; // full
+    stack[(*stack_len)++] = item;
+}
+
+int stack_peek(int * stack, int * stack_len, int stack_max_len) {
+    if (*stack_len < 1) return -1; // empty
+    return stack[(*stack_len)-1];
+}
+
+int stack_pop(int * stack, int * stack_len, int stack_max_len) {
+    if (*stack_len < 1) return -1; // empty
+    return stack[--(*stack_len)];
+}
+
+void stack_remove(int * stack, int * stack_len, int stack_max_len, int item_i) {
+    if (*stack_len < stack_max_len)
+        memcpy(stack + item_i, stack + item_i+1, sizeof(int) * (*stack_len - item_i));
+    --(*stack_len);
+}
+
+void stack_reorder_top(int * stack, int * stack_len, int stack_max_len, double global_trans[]) {
+    if (*stack_len <= 0) return;
+
+    int cur_coarse_map_pos[2] = {-(global_trans[0] / MAP_RATIO) + MAP_SIZE / 2 / COARSE_RATIO, -(global_trans[1] / MAP_RATIO) + MAP_SIZE / 2 / COARSE_RATIO};
+    const int coarse_map_width = (MAP_SIZE / COARSE_RATIO);
+
+    double cur_goal_dist = euclidean_flat_dist(cur_coarse_map_pos[0], cur_coarse_map_pos[1], stack[*stack_len-1] % coarse_map_width, stack[*stack_len-1] / coarse_map_width);
+    if (cur_goal_dist >= SWAP_GOALS_THRESHOLD) {    // if current goal further than threshold
+        int closest_goal_i = -1;
+        double closest_goal_dist = cur_goal_dist;
+        for (int i = 0; i < *stack_len; ++i) {      // check all the goals to try to find a closer one
+            double this_goal_dist = euclidean_flat_dist(cur_coarse_map_pos[0], cur_coarse_map_pos[1], stack[i] % coarse_map_width, stack[i] / coarse_map_width);
+            if (this_goal_dist < closest_goal_dist) {
+                closest_goal_dist = this_goal_dist;
+                closest_goal_i = i;
+            }
+        }
+
+        if (closest_goal_i != -1) { // a closer goal was found
+            // shuffle this goal to be new top
+            int temp = stack[closest_goal_i];
+            memcpy(stack + sizeof(int) * closest_goal_i, stack + sizeof(int) * (closest_goal_i+1), sizeof(int) * (*stack_len - closest_goal_i - 1));
+            stack[*stack_len - 1] = temp;
+        }
+    }
+}
+
 double euclidean_flat_dist(double a_x, double a_y, double b_x, double b_y) {
     return sqrt(pow(b_x-a_x, 2) +  pow(b_y-a_y, 2));
 }
@@ -839,11 +891,16 @@ int find_min_f(AStarNode * open, int len) {
 }
 
 // do A* on cells in coarse map to find goal
-bool next_coarse_path_node(double start_pos[], double goal_pos[], int cur_goal, bool goal_reached[], int next_coarse_pos[]) {
+bool next_coarse_path_node(double start_pos[], int goal_stack[], int * stack_len, int next_coarse_pos[]) { // goal_stack is in coarse map space
     const int coarse_map_width = (MAP_SIZE / COARSE_RATIO);
     int coarse_start_pos[2] = {start_pos[0] / COARSE_RATIO, start_pos[1] / COARSE_RATIO};
-    int coarse_goal_pos[2] = {goal_pos[2*cur_goal+0] / COARSE_RATIO, goal_pos[2*cur_goal+1] / COARSE_RATIO};
-    int coarse_goal = (goal_pos[2*cur_goal+1] / COARSE_RATIO) * coarse_map_width + (goal_pos[2*cur_goal+0] / COARSE_RATIO);
+    if (coarse_start_pos[0] < 0) coarse_start_pos[0] = 0;
+    if (coarse_start_pos[0] >= coarse_map_width) coarse_start_pos[0] = coarse_map_width - 1;
+    if (coarse_start_pos[1] < 0) coarse_start_pos[1] = 0;
+    if (coarse_start_pos[1] >= coarse_map_width) coarse_start_pos[1] = coarse_map_width - 1;
+
+    int coarse_goal_pos[2] = {goal_stack[(*stack_len)-1] % coarse_map_width, goal_stack[(*stack_len)-1] / coarse_map_width};
+    int coarse_goal = goal_stack[(*stack_len)-1];//(goal_stack[stack_len-1] / coarse_map_width / COARSE_RATIO) * coarse_map_width + (goal_stack[stack_len-1] % coarse_map_width / COARSE_RATIO);
     int total_coarse_cells = coarse_map_width * coarse_map_width;
 
     int pq_size = 0;
@@ -859,27 +916,24 @@ bool next_coarse_path_node(double start_pos[], double goal_pos[], int cur_goal, 
     }
 
     int coarse_start = coarse_start_pos[1] * coarse_map_width + coarse_start_pos[0];
-    for (int i = 0; i < 8; ++i) { // check if have reached any of the unreached goals
-        if (goal_reached[i] && i == cur_goal) { // if this cur_goal already reached somehow, return early
-            free(pq);
-            free(nodes); 
-            printf("REACHED GOAL\n");
-            return true;
-        }
-        if (goal_reached[i] || i == cur_goal) continue;
-        
-        int goal_i_pos_x = goal_pos[2*i+0] / COARSE_RATIO;
-        int goal_i_pos_y = goal_pos[2*i+1] / COARSE_RATIO;
+    for (int i = 0; i < (*stack_len)-1; ++i) { // check if have reached any of the unreached goals        
+        int goal_i_pos_x = goal_stack[i] % coarse_map_width;
+        int goal_i_pos_y = goal_stack[i] / coarse_map_width;
         if (euclidean_flat_dist(goal_i_pos_x, goal_i_pos_y, coarse_goal_pos[0], coarse_goal_pos[1]) <= REACHED_DISTANCE) {
-            goal_reached[i] = true;
+            stack_remove(goal_stack, stack_len, total_coarse_cells, i);
+            --i; // have to --i because the next item in the stack will be in the position just removed from
         }
     }
 
     int coarse_start_dist_to_goal = euclidean_flat_dist(coarse_start_pos[0], coarse_start_pos[1], coarse_goal_pos[0], coarse_goal_pos[1]);
-    if (coarse_start_dist_to_goal <= REACHED_DISTANCE) return true; // return true to signal to find a new goal
+    if (coarse_start_dist_to_goal <= REACHED_DISTANCE) { 
+        free(pq);
+        free(nodes); 
+        return true; // return true to signal to find a new goal
+    }
     pq_enqueue(pq, nodes, coarse_start, coarse_start_dist_to_goal, true, -1, 0.0, &pq_size, total_coarse_cells);
 
-    int closest_to_goal = 0;
+    int closest_to_goal = -1;
     double closest_to_goal_dist = DBL_MAX;
 
     bool goal_found = false;
@@ -928,9 +982,15 @@ bool next_coarse_path_node(double start_pos[], double goal_pos[], int cur_goal, 
 
 
     int cur = coarse_goal;  // if the goal was reached, trace path from goal, 
-    if (!goal_found) {      // otherwise, update goal_pos to closest by euclidean reached cell to goal and trace path from that
+    if (!goal_found) {      // otherwise, trace path from closest traversed cell by euclidean distance
         cur = closest_to_goal;
-        // can't set the actual goal to this because this would trigger if there just hasn't been any obstacles seen yet
+        // if is on top of or within reached proximity to this closest cell, mark the actual goal as reached (by returning true)
+        // this asserts that, since the robot has reached the closest cell to the actual goal it could find a path to, and has not rerouted to find a better path, there will not be a better path
+        if (closest_to_goal == -1 || euclidean_flat_dist(coarse_start_pos[0], coarse_start_pos[1], closest_to_goal % coarse_map_width, closest_to_goal / coarse_map_width) <= REACHED_DISTANCE) {
+            free(pq);
+            free(nodes); 
+            return true;
+        }
         //int new_goal_x = (closest_to_goal % coarse_map_width) * COARSE_RATIO + COARSE_RATIO / 2;
         //int new_goal_y = (closest_to_goal / coarse_map_width) * COARSE_RATIO + COARSE_RATIO / 2;
         //goal_pos[2*cur_goal+0] = new_goal_x;
@@ -954,14 +1014,63 @@ bool next_coarse_path_node(double start_pos[], double goal_pos[], int cur_goal, 
     return false;
 }
 
+void find_corners(int goal_stack[], int * stack_len, int stack_max_len, double global_trans[]) {
+    int cur_coarse_map_pos[2] = {-(global_trans[0] / MAP_RATIO) + MAP_SIZE / 2 / COARSE_RATIO, -(global_trans[1] / MAP_RATIO) + MAP_SIZE / 2 / COARSE_RATIO};
+    const int coarse_map_width = (MAP_SIZE / COARSE_RATIO);
+    for (int i = 1; i < coarse_map_width-1; ++i) {
+        for (int j = 1; j < coarse_map_width-1; ++j) {
+            if (coarse_corner_map[i][j]) continue;
+
+            int sum = 0;
+            for (int k = -1; k <= 1; ++k) {
+                for (int l = -1; l <= 1; ++l) {
+                    if (coarse_map[i+k][j+l]) ++sum;
+                }
+            }
+
+            // corners are marked if 4/9 cells occupied, and the center clear, and los check, and the 4 clear cells match 1 of 8 patterns I think look like a corner interior
+            if (sum == 5 && !coarse_map[i][j] && bresenhams_line(i*coarse_map_width + j, cur_coarse_map_pos[1]*coarse_map_width + cur_coarse_map_pos[0]) && (
+                (!coarse_map[i-1][j] && !coarse_map[i-1][j-1] && !coarse_map[i-1][j+1]) ||
+                (!coarse_map[i+1][j] && !coarse_map[i+1][j-1] && !coarse_map[i+1][j+1]) ||
+                (!coarse_map[i][j-1] && !coarse_map[i-1][j-1] && !coarse_map[i+1][j-1]) ||
+                (!coarse_map[i][j+1] && !coarse_map[i-1][j+1] && !coarse_map[i+1][j+1]) ||
+                (!coarse_map[i-1][j-1] && !coarse_map[i-1][j] && !coarse_map[i][j-1]) ||
+                (!coarse_map[i+1][j+1] && !coarse_map[i+1][j] && !coarse_map[i][j+1]) ||
+                (!coarse_map[i-1][j+1] && !coarse_map[i-1][j] && !coarse_map[i][j+1]) ||
+                (!coarse_map[i+1][j-1] && !coarse_map[i+1][j] && !coarse_map[i][j-1])
+            )) {
+                for (int k = -1; k <= 1; ++k) {             // mark the 3x3 around as corner to avoid duplicate if skew occurs
+                    for (int l = -1; l <= 1; ++l) {
+                        coarse_corner_map[i+k][j+l] = true;
+                    }
+                }
+                int node_center_x = j * COARSE_RATIO + COARSE_RATIO / 2;
+                int node_center_y = i * COARSE_RATIO + COARSE_RATIO / 2;
+                map[node_center_y][node_center_x] = 248;
+
+                stack_push(goal_stack, stack_len, stack_max_len, i * coarse_map_width + j);
+            }
+        }
+    }
+}
+
 void SLAM_run() {
     RangeScanNode * head = create_range_scan_node();
     RangeScanNode * prev = head;
     double global_trans[2] = {0};
     double global_rot = 0;
-    double goals[16] = {125,60, 190,60, 190,125, 190,190, 125,190, 60,190, 60,125, 60,60}; // ^, ^>, >, v>, v, <v, <, <^
-    bool goal_reached[8] = {false, false, false, false, false, false, false, false};
-    int cur_goal = 0;
+    //int rough_goals[16] = {125,60, 190,60, 190,125, 190,190, 125,190, 60,190, 60,125, 60,60}; // ^, ^>, >, v>, v, <v, <, <^
+    int rough_coarse_goals[16] = {25,12, 38,12, 38,25, 38,38, 25,38, 12,38, 12,25, 12,12}; // ^, ^>, >, v>, v, <v, <, <^
+    const int coarse_map_width = (MAP_SIZE / COARSE_RATIO);
+    const int total_coarse_cells = coarse_map_width * coarse_map_width;
+    int * goal_stack = malloc(sizeof(int) * total_coarse_cells); 
+    //bool goal_reached[8] = {false, false, false, false, false, false, false, false};
+    //int cur_goal = 0;
+    int stack_len = 0;
+    for (int i = 7; i >= 0; --i) { // add all hardcoded goals to the stack
+        stack_push(goal_stack, &stack_len, total_coarse_cells, rough_coarse_goals[i*2+1]*coarse_map_width + rough_coarse_goals[i*2]);
+        coarse_corner_map[rough_coarse_goals[i*2+1]][rough_coarse_goals[i*2]] = true; // add to corner map to prevent duplication as corners
+    }
 
     
     enum {PLANNING, ROTATING, MOVING};
@@ -974,6 +1083,8 @@ void SLAM_run() {
     while (true) {
         if (slam_restart || slam_end) break;
         prev = SLAM_iteration(prev, global_trans, &global_rot);
+        find_corners(goal_stack, &stack_len, total_coarse_cells, global_trans);
+        stack_reorder_top(goal_stack, &stack_len, total_coarse_cells, global_trans);
         ++iterations;
 
         if (state == PLANNING) {
@@ -981,12 +1092,13 @@ void SLAM_run() {
             double cur_map_pos[2] = {-(global_trans[0] / MAP_RATIO) + MAP_SIZE / 2, -(global_trans[1] / MAP_RATIO) + MAP_SIZE / 2};
             
 
-            // find next node in BFS on coarse_map
-            if (next_coarse_path_node(cur_map_pos, goals, cur_goal, goal_reached, next_coarse_pos)) { // true means the robot is at the goal, so switch goal to the next one
-                goal_reached[cur_goal] = true;
-                while (cur_goal < 8 && !goal_reached[cur_goal]) ++cur_goal;
-                if (cur_goal >= 8) return; // all the goals have been reached
-                next_coarse_path_node(cur_map_pos, goals, cur_goal, goal_reached, next_coarse_pos); // replan path again because goal has been updated
+            // find next node in A* path to goal on coarse_map
+            while (next_coarse_path_node(cur_map_pos, goal_stack, &stack_len, next_coarse_pos)) { // keep popping goals while the robot is at the goal
+                stack_pop(goal_stack, &stack_len, total_coarse_cells);
+                if (stack_len <= 0) { // all the goals have been reached
+                    free(goal_stack);
+                    return;
+                }
             }   
             int map_cell_center_x = next_coarse_pos[0] * COARSE_RATIO + 1 + (COARSE_RATIO - 1) / 2;
             int map_cell_center_y = next_coarse_pos[1] * COARSE_RATIO + 1 + (COARSE_RATIO - 1) / 2;
@@ -994,7 +1106,8 @@ void SLAM_run() {
             next_world_pos[1] = (map_cell_center_x - MAP_SIZE / 2) * MAP_RATIO;
             
             map_tree[(int)cur_map_pos[1]][(int)cur_map_pos[0]] = 253;   // draw start on map
-            map_tree[(int)goals[2*cur_goal+1]][(int)goals[2*cur_goal+0]] = 253;     // draw goal on map
+            map_tree[goal_stack[stack_len-1] / coarse_map_width][goal_stack[stack_len-1] % coarse_map_width] = 253;     // draw goal on map
+            //map_tree[(int)goals[2*cur_goal+1]][(int)goals[2*cur_goal+0]] = 253;     // draw goal on map
             map_tree[(int)map_cell_center_y][(int)map_cell_center_x] = 254;   // draw next node endpoint on map
 
 
@@ -1094,7 +1207,7 @@ void fill_coarse_map() {
     // fill coarse_map with obstacles 
     for (size_t i = 0; i < MAP_SIZE; ++i) {
         for (size_t j = 0; j < MAP_SIZE; ++j) {
-            if (map[i][j] != 0 && map[i][j] != 252 && map[i][j] != 250 && map[i][j] != 249)
+            if (map[i][j] != 0 && map[i][j] != 252 && map[i][j] != 250 && map[i][j] != 249 && map[i][j] != 248)
                 coarse_map[i/COARSE_RATIO][j/COARSE_RATIO] = true;
         }
     }
@@ -1117,7 +1230,6 @@ void fill_coarse_map() {
         }
     }
 
-    // I intend to inflate obstacle cells by 1 on coarse_map once I pinpoint the collision bug with the new coarse cell display
     
     // inflate obstacle cells by 1
     //const int w = MAP_SIZE / COARSE_RATIO;
@@ -1165,28 +1277,19 @@ void fill_coarse_map() {
 }
 
 // 0 = check edge constraint on coarse_map, 1 = draw edge constraint on coarse_map, 2 = draw RRT on map
-bool bresenhams_line(RRT_node * a, RRT_node * b, uint8_t edge_constraint_or_draw_rrt) {
+bool bresenhams_line(int a, int b) {
     // use bresenhams line algorithm to walk along edge on coarse map
-    int a_x = a->x / COARSE_RATIO, a_y = a->y / COARSE_RATIO, b_x = b->x / COARSE_RATIO, b_y = b->y / COARSE_RATIO;
-    if (edge_constraint_or_draw_rrt == 2) {
-        a_x = a->x; a_y = a->y; b_x = b->x; b_y = b->y;
-    }
+    const int coarse_map_width = (MAP_SIZE / COARSE_RATIO);
+    int a_x = a % coarse_map_width, a_y = a / coarse_map_width, b_x = b % coarse_map_width, b_y = b / coarse_map_width;
     int dx = abs(b_x - a_x), dy = -abs(b_y - a_y);
     int s_x = a_x < b_x ? 1 : -1, s_y = a_y < b_y ? 1 : -1;
     int error = dx + dy;
 
     while (true) {
-        if (edge_constraint_or_draw_rrt == 0) {
-            if (coarse_map[a_y][a_x] || (coarse_tree_map[a_y][a_x] && (
-                (a_x != a->x / COARSE_RATIO || a_y != a->y / COARSE_RATIO) &&
-                (a_x != b->x / COARSE_RATIO || a_y != b->y / COARSE_RATIO))))
-                return false;
-        } else if (edge_constraint_or_draw_rrt == 1) {
-            coarse_tree_map[a_y][a_x] = true;
-        } else if (a_y >= 0 && a_y < MAP_SIZE && a_x >= 0 && a_x < MAP_SIZE) {
-            if (map_tree[a_y][a_x] == 0)
-                map_tree[a_y][a_x] = 255;
-        }
+        if (coarse_map[a_y][a_x] && (
+            (a_x != a % coarse_map_width || a_y != a / coarse_map_width) &&
+            (a_x != b % coarse_map_width || b_y != b / coarse_map_width)))
+            return false;
 
         if (a_x == b_x && a_y == b_y) break;
 
@@ -1199,6 +1302,7 @@ bool bresenhams_line(RRT_node * a, RRT_node * b, uint8_t edge_constraint_or_draw
     return true;
 }
 
+/*
 bool edge_constraints_met(RRT_node * a, RRT_node * b) { // local planner
     if (a == NULL || b == NULL) return false;
 
@@ -1294,6 +1398,7 @@ void free_RRT(RRT_node * root) {
         free(RRT_traversal_queue[k]);
     }
 }
+*/
 
 
 void manual_control() {
@@ -1321,6 +1426,7 @@ void manual_control() {
             manual_forward = false;
         }
         prev = SLAM_iteration(prev, global_trans, &global_rot);
+        //find_corners();
         memcpy(map_tree, map, sizeof(uint8_t) * MAP_SIZE * MAP_SIZE);
         double cur_map_pos[2] = {-(global_trans[0] / MAP_RATIO) + MAP_SIZE / 2, -(global_trans[1] / MAP_RATIO) + MAP_SIZE / 2};
         map_tree[(int)cur_map_pos[1]][(int)cur_map_pos[0]] = 253;   // draw start on map
@@ -1457,8 +1563,8 @@ void app_main(void)
             gpio_set_level(GPIO_NUM_20, 1);
             vTaskDelay(pdMS_TO_TICKS(10));
 
-            //SLAM_run();
-            manual_control();
+            SLAM_run();
+            //manual_control();
         }
         vTaskDelay(pdMS_TO_TICKS(100));
     };
